@@ -1,0 +1,55 @@
+{
+  "name": "@nymrel/crawler-mesh",
+  "version": "1.0.0",
+  "description": "High-throughput, zero-telemetry web crawler & clean markdown/JSON extractor built for AI agents and LLMs",
+  "keywords": [
+    "crawler",
+    "web-scraper",
+    "markdown-extractor",
+    "llm",
+    "ai-agent",
+    "rag",
+    "robots-txt",
+    "sitemap",
+    "clean-markdown",
+    "zero-telemetry",
+    "nymrel"
+  ],
+  "homepage": "https://github.com/nymrel/nymrel-crawler-mesh#readme",
+  "bugs": {
+    "url": "https://github.com/nymrel/nymrel-crawler-mesh/issues"
+  },
+  "license": "MIT",
+  "author": "Nymrel / JalenBuilds LLC <contact@jalenbuilds.com>",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "bin": {
+    "crawler-mesh": "./bin/crawler-mesh.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "LICENSE",
+    "llms.txt"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/**/*.test.mjs test/**/*.test.js dist/test/**/*.test.js || node --test test/*.test.js",
+    "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist', {recursive:true, force:true});\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nymrel/nymrel-crawler-mesh.git"
+  }
+}

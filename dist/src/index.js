@@ -1,0 +1,39 @@
+/**
+ * @nymrel/crawler-mesh
+ * Zero-Telemetry High-Throughput Web Crawler & Markdown/JSON Extractor for AI Agents
+ * Copyright (c) 2026 Nymrel / JalenBuilds LLC
+ */
+import { CrawlerMesh } from './crawler/mesh.js';
+import { parseSitemapXml } from './crawler/sitemap.js';
+// Re-export all subsystems and types
+export * from './types.js';
+export * from './cache/index.js';
+export * from './cache/types.js';
+export * from './extractor/index.js';
+export * from './crawler/index.js';
+/**
+ * Convenient standalone single URL crawler with Markdown extraction
+ */
+export async function crawlUrl(url, options = {}) {
+    const mesh = new CrawlerMesh({
+        cache: options.cache,
+        cacheDir: options.cacheDir,
+        cacheTtl: options.cacheTtl,
+        timeoutMs: options.timeoutMs,
+        userAgent: options.userAgent,
+        respectRobots: options.respectRobots,
+        headers: options.headers,
+        extractorOptions: options.extractorOptions,
+        fetch: options.fetch
+    });
+    return mesh.crawlUrl(url, options);
+}
+/**
+ * Convenient standalone sitemap parser for XML strings
+ */
+export function parseSitemap(xml) {
+    return parseSitemapXml(xml);
+}
+// Default export
+export default CrawlerMesh;
+//# sourceMappingURL=index.js.map
