@@ -52,6 +52,7 @@ class RobotsParser:
 
         lines = content.splitlines()
         current_user_agents: List[str] = []
+        is_reading_user_agents = False
 
         for raw_line in lines:
             line = raw_line.split("#")[0].strip()
@@ -67,14 +68,19 @@ class RobotsParser:
 
             if field == "user-agent":
                 ua = value.lower()
-                current_user_agents.append(ua)
-                for agent in current_user_agents:
-                    if agent not in self.user_agent_groups:
-                        self.user_agent_groups[agent] = UserAgentRules(user_agent=agent, rules=[])
+                if not is_reading_user_agents:
+                    current_user_agents = []
+                    is_reading_user_agents = True
+                if ua not in current_user_agents:
+                    current_user_agents.append(ua)
+                if ua not in self.user_agent_groups:
+                    self.user_agent_groups[ua] = UserAgentRules(user_agent=ua, rules=[])
             elif field == "sitemap":
+                is_reading_user_agents = False
                 if value and value not in self.sitemaps:
                     self.sitemaps.append(value)
             elif field in ("disallow", "allow"):
+                is_reading_user_agents = False
                 if not current_user_agents:
                     current_user_agents = ["*"]
                     if "*" not in self.user_agent_groups:

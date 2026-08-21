@@ -39,6 +39,7 @@ export class RobotsParser {
 
     const lines = content.split(/\r?\n/);
     let currentUserAgents: string[] = [];
+    let isReadingUserAgents = false;
 
     for (let rawLine of lines) {
       // Strip comments
@@ -57,21 +58,23 @@ export class RobotsParser {
 
       if (field === 'user-agent') {
         const ua = value.toLowerCase();
-        // If preceding line was not user-agent, start new group
-        if (currentUserAgents.length > 0 && !this.userAgentGroups.has(currentUserAgents[0])) {
-          // keep appending
+        if (!isReadingUserAgents) {
+          currentUserAgents = [];
+          isReadingUserAgents = true;
         }
-        currentUserAgents.push(ua);
-        for (const agent of currentUserAgents) {
-          if (!this.userAgentGroups.has(agent)) {
-            this.userAgentGroups.set(agent, { userAgent: agent, rules: [] });
-          }
+        if (!currentUserAgents.includes(ua)) {
+          currentUserAgents.push(ua);
+        }
+        if (!this.userAgentGroups.has(ua)) {
+          this.userAgentGroups.set(ua, { userAgent: ua, rules: [] });
         }
       } else if (field === 'sitemap') {
+        isReadingUserAgents = false;
         if (value && !this.sitemaps.includes(value)) {
           this.sitemaps.push(value);
         }
       } else if (field === 'disallow' || field === 'allow') {
+        isReadingUserAgents = false;
         if (currentUserAgents.length === 0) {
           currentUserAgents = ['*'];
           if (!this.userAgentGroups.has('*')) {

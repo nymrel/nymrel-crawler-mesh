@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.crawler-cache/
+.test-cache-dir/
+.test-py-cache/
+*.pyc
+__pycache__/
+*.egg-info/
+build/
+.temp-*
+.DS_Store
+Thumbs.db

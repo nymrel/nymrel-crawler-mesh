@@ -7,7 +7,7 @@ name = "nymrel_crawler_mesh"
 version = "1.0.0"
 description = "High-throughput, zero-telemetry web crawler & clean markdown/JSON extractor built for AI agents and LLMs"
 readme = "README.md"
-authors = [{ name = "Nymrel / JalenBuilds LLC", email = "contact@jalenbuilds.com" }]
+authors = [{ name = "Nymrel / JalenBuilds LLC", email = "contact@nymrel.com" }]
 license = { text = "MIT" }
 requires-python = ">=3.9"
 keywords = ["crawler", "scraper", "markdown", "llm", "ai-agent", "rag", "robots-txt", "sitemap", "zero-telemetry", "nymrel"]

@@ -395,7 +395,9 @@ export class CrawlerMesh extends EventEmitter {
           }
         } catch (err: any) {
           errorCount++;
-          this.emit('error', { url: item.url, error: err, depth: item.depth });
+          if (this.listenerCount('error') > 0) {
+            this.emit('error', { url: item.url, error: err, depth: item.depth });
+          }
         }
       }
     };

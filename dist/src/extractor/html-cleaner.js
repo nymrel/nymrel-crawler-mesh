@@ -57,12 +57,12 @@ export function cleanHtml(html, options = {}) {
     // 6. Target main content if enabled (<article>, <main>, or [role="main"])
     if (options.targetMainContent !== false) {
         const mainMatch = cleaned.match(/<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/i);
-        if (mainMatch && mainMatch[2].trim().length > 100) {
+        if (mainMatch && mainMatch[2].trim().length > 0) {
             cleaned = mainMatch[2];
         }
         else {
             const roleMainMatch = cleaned.match(/<([a-z0-9]+)\b[^>]*role=["']main["'][^>]*>([\s\S]*?)<\/\1>/i);
-            if (roleMainMatch && roleMainMatch[2].trim().length > 100) {
+            if (roleMainMatch && roleMainMatch[2].trim().length > 0) {
                 cleaned = roleMainMatch[2];
             }
         }

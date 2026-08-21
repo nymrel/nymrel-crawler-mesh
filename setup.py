@@ -7,7 +7,7 @@ setup(
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="Nymrel / JalenBuilds LLC",
-    author_email="contact@jalenbuilds.com",
+    author_email="contact@nymrel.com",
     url="https://github.com/nymrel/nymrel-crawler-mesh",
     license="MIT",
     package_dir={"": "python"},

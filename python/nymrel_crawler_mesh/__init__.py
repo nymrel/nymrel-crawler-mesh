@@ -29,7 +29,7 @@ from .robots import RobotsParser
 from .sitemap import fetch_and_parse_sitemap, parse_sitemap_xml
 
 __version__ = "1.0.0"
-__author__ = "Nymrel / JalenBuilds LLC <contact@jalenbuilds.com>"
+__author__ = "Nymrel / JalenBuilds LLC <contact@nymrel.com>"
 
 __all__ = [
     "CrawlerMesh",

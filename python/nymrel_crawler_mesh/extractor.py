@@ -65,11 +65,11 @@ def clean_html(raw_html: str, target_main_content: bool = True) -> str:
     # 6. Target main content if enabled (<article>, <main>, or [role="main"])
     if target_main_content:
         main_match = re.search(r"<(main|article)\b[^>]*>([\s\S]*?)</\1>", cleaned, flags=re.IGNORECASE)
-        if main_match and len(main_match.group(2).strip()) > 100:
+        if main_match and len(main_match.group(2).strip()) > 0:
             cleaned = main_match.group(2)
         else:
             role_match = re.search(r"<([a-z0-9]+)\b[^>]*role=[\"']main[\"'][^>]*>([\s\S]*?)</\1>", cleaned, flags=re.IGNORECASE)
-            if role_match and len(role_match.group(2).strip()) > 100:
+            if role_match and len(role_match.group(2).strip()) > 0:
                 cleaned = role_match.group(2)
 
     return cleaned.strip()
@@ -415,13 +415,16 @@ def extract_markdown(
     if include_frontmatter:
         fm = ["---"]
         if metadata.title:
-            fm.append(f'title: "{metadata.title.replace(\'"\', \'\\\\"\')}"')
+            escaped_title = metadata.title.replace('"', '\\"')
+            fm.append(f'title: "{escaped_title}"')
         if metadata.description:
-            fm.append(f'description: "{metadata.description.replace(\'"\', \'\\\\"\')}"')
+            escaped_desc = metadata.description.replace('"', '\\"')
+            fm.append(f'description: "{escaped_desc}"')
         if metadata.canonical:
             fm.append(f'canonical: "{metadata.canonical}"')
         if metadata.author:
-            fm.append(f'author: "{metadata.author.replace(\'"\', \'\\\\"\')}"')
+            escaped_author = metadata.author.replace('"', '\\"')
+            fm.append(f'author: "{escaped_author}"')
         if metadata.published_time:
             fm.append(f'published: "{metadata.published_time}"')
         if metadata.language:
