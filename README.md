@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-%3E%3D3.9-3776AB.svg?logo=python)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7+-3178C6.svg?logo=typescript)](https://www.typescriptlang.org)
 [![Zero Telemetry](https://img.shields.io/badge/Telemetry-Zero%20(Local%20Only)-blue.svg)](#zero-telemetry-guarantee)
-[![Nymrel](https://img.shields.io/badge/Entity-Nymrel%20%7C%20JalenBuilds%20LLC-darkgreen.svg)](https://jalenbuilds.com)
+[![Nymrel](https://img.shields.io/badge/Entity-Nymrel%20%7C%20JalenBuilds%20LLC-darkgreen.svg)](https://nymrel.com)
 
 *Dual Engine: Native TypeScript / Node.js + Python with 100% Feature Parity*
 

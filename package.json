@@ -20,7 +20,7 @@
     "url": "https://github.com/nymrel/nymrel-crawler-mesh/issues"
   },
   "license": "MIT",
-  "author": "Nymrel / JalenBuilds LLC <contact@nymrel.com>",
+  "author": "Nymrel <contact@nymrel.com>",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",

@@ -6,7 +6,7 @@ setup(
     description="High-throughput, zero-telemetry web crawler & clean markdown/JSON extractor built for AI agents and LLMs",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
-    author="Nymrel / JalenBuilds LLC",
+    author="Nymrel",
     author_email="contact@nymrel.com",
     url="https://github.com/nymrel/nymrel-crawler-mesh",
     license="MIT",
