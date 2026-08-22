@@ -1,0 +1,16 @@
+[
+  {
+    "title": "Crawler Mesh 1.0",
+    "url": "https://example.com/releases/crawler-mesh-1-0",
+    "publishedAt": "2026-08-20T16:00:00Z",
+    "summary": "Initial public release.",
+    "tags": ["crawler", "release"]
+  },
+  {
+    "title": "Radar update",
+    "url": "https://example.com/releases/radar-update",
+    "publishedAt": "2026-08-21T16:00:00Z",
+    "summary": "Added structured change monitoring.",
+    "tags": ["monitoring"]
+  }
+]
