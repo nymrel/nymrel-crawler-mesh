@@ -25,7 +25,8 @@
   "types": "dist/index.d.ts",
   "type": "module",
   "bin": {
-    "crawler-mesh": "./bin/crawler-mesh.js"
+    "crawler-mesh": "./bin/crawler-mesh.js",
+    "radar-heal": "./dist/src/radar-heal/cli.js"
   },
   "files": [
     "dist",
@@ -39,6 +40,7 @@
     "build:watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "tsc && node --test dist/test/*.test.js",
+    "radar-heal": "node dist/src/radar-heal/cli.js",
     "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist', {recursive:true, force:true});\"",
     "prepublishOnly": "npm run build && npm test"
   },
