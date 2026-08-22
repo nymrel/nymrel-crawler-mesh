@@ -76,7 +76,10 @@ function validateContract(contract: ScrapeContract): void {
     }
     seen.add(field.path);
   }
-  if (contract.minRecords !== undefined && (!Number.isInteger(contract.minRecords) || contract.minRecords < 0)) {
+  if (
+    contract.minRecords !== undefined &&
+    (!Number.isInteger(contract.minRecords) || contract.minRecords < 0)
+  ) {
     throw new Error('minRecords must be a non-negative integer');
   }
 }
@@ -135,7 +138,8 @@ export function evaluateSnapshot(
 ): DriftReport {
   validateContract(contract);
   const records = ensureRecords(snapshotValue, 'snapshot');
-  const baseline = baselineValue === undefined ? null : ensureRecords(baselineValue, 'baseline');
+  const baseline =
+    baselineValue === undefined ? null : ensureRecords(baselineValue, 'baseline');
   const issues: DriftIssue[] = [];
 
   const minimum = contract.minRecords ?? 1;
@@ -189,7 +193,7 @@ export function evaluateSnapshot(
     for (const field of contract.fields) {
       const before = presentRatio(baseline, field);
       const after = presentRatio(records, field);
-      if (before >= 0.8 && after < before * 0.5) {
+      if (before >= 0.8 && after <= before * 0.5) {
         addIssue(issues, {
           code: 'baseline_presence_drop',
           path: field.path,
