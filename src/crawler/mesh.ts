@@ -20,12 +20,21 @@ import { extractDomain, PoliteRateLimiter } from './rate-limiter.js';
 import { CrawlQueue } from './queue.js';
 import { RobotsParser } from './robots.js';
 import { fetchAndParseSitemap } from './sitemap.js';
+import {
+  assertSafeHttpUrl,
+  DEFAULT_MAX_REDIRECTS,
+  DEFAULT_MAX_RESPONSE_BYTES,
+  fetchWithPolicy,
+  readResponseText,
+  type NetworkPolicyOptions
+} from './network-policy.js';
 
 export class CrawlerMesh extends EventEmitter {
   private config: CrawlOptions;
   private cache: ContentCache;
   private rateLimiter: PoliteRateLimiter;
   private robotsCache: Map<string, RobotsParser> = new Map();
+  private robotsInFlight: Map<string, Promise<RobotsParser>> = new Map();
 
   constructor(options: CrawlOptions = {}) {
     super();
@@ -46,7 +55,11 @@ export class CrawlerMesh extends EventEmitter {
       includeSitemaps: options.includeSitemaps ?? false,
       extractorOptions: options.extractorOptions || {},
       headers: options.headers || {},
-      fetch: options.fetch || globalThis.fetch
+      fetch: options.fetch,
+      allowPrivateNetworks: options.allowPrivateNetworks ?? false,
+      maxResponseBytes: options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
+      maxRedirects: options.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
+      resolveHostname: options.resolveHostname
     };
 
     this.cache = new ContentCache({
@@ -61,7 +74,20 @@ export class CrawlerMesh extends EventEmitter {
     });
   }
 
-  private async getRobotsParser(urlStr: string): Promise<RobotsParser | null> {
+  private applyRobotsDelay(parser: RobotsParser, urlStr: string, userAgent: string): void {
+    const crawlDelay = parser.getCrawlDelay(userAgent);
+    if (crawlDelay !== undefined && crawlDelay > 0) {
+      this.rateLimiter.setDomainDelay(extractDomain(urlStr), crawlDelay * 1000);
+    }
+  }
+
+  private async getRobotsParser(
+    urlStr: string,
+    userAgent: string,
+    fetchFn: typeof globalThis.fetch | undefined,
+    networkOptions: NetworkPolicyOptions,
+    timeoutMs: number
+  ): Promise<RobotsParser | null> {
     if (!this.config.respectRobots) return null;
 
     let origin = '';
@@ -71,38 +97,61 @@ export class CrawlerMesh extends EventEmitter {
       return null;
     }
 
-    if (this.robotsCache.has(origin)) {
-      return this.robotsCache.get(origin)!;
+    const cached = this.robotsCache.get(origin);
+    if (cached) {
+      this.applyRobotsDelay(cached, urlStr, userAgent);
+      return cached;
     }
 
-    const robotsUrl = `${origin}/robots.txt`;
-    const parser = new RobotsParser();
+    const inFlight = this.robotsInFlight.get(origin);
+    if (inFlight) {
+      const parser = await inFlight;
+      this.applyRobotsDelay(parser, urlStr, userAgent);
+      return parser;
+    }
 
+    const pending = this.loadRobotsParser(origin, userAgent, fetchFn, networkOptions, timeoutMs);
+    this.robotsInFlight.set(origin, pending);
     try {
-      const fetchFn = this.config.fetch || globalThis.fetch;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const parser = await pending;
+      this.applyRobotsDelay(parser, urlStr, userAgent);
+      return parser;
+    } finally {
+      this.robotsInFlight.delete(origin);
+    }
+  }
 
-      const resp = await fetchFn(robotsUrl, {
-        signal: controller.signal,
+  private async loadRobotsParser(
+    origin: string,
+    userAgent: string,
+    fetchFn: typeof globalThis.fetch | undefined,
+    networkOptions: NetworkPolicyOptions,
+    timeoutMs: number
+  ): Promise<RobotsParser> {
+    const parser = new RobotsParser();
+    try {
+      const { response } = await fetchWithPolicy(`${origin}/robots.txt`, {
         headers: {
-          'User-Agent': this.config.userAgent || 'NymrelCrawlerMesh/1.0'
+          'User-Agent': userAgent
         }
+      }, {
+        fetch: fetchFn,
+        timeoutMs: Math.min(timeoutMs, 5_000),
+        ...networkOptions
       });
-      clearTimeout(timeout);
 
-      if (resp.ok) {
-        const text = await resp.text();
+      if (response.ok) {
+        const text = await readResponseText(
+          response,
+          Math.min(networkOptions.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES, 1024 * 1024)
+        );
         parser.parse(text);
-
-        const crawlDelay = parser.getCrawlDelay(this.config.userAgent);
-        if (crawlDelay !== undefined && crawlDelay > 0) {
-          const domain = extractDomain(urlStr);
-          this.rateLimiter.setDomainDelay(domain, crawlDelay * 1000);
-        }
+      } else {
+        await response.body?.cancel();
       }
     } catch {
-      // If robots.txt fails or 404s, allow crawling
+      // A missing/unavailable robots.txt is treated as allow-all. Target policy
+      // is independently enforced before the page request.
     }
 
     this.robotsCache.set(origin, parser);
@@ -111,17 +160,25 @@ export class CrawlerMesh extends EventEmitter {
 
   public async crawlUrl(rawUrl: string, options: SingleCrawlOptions = {}): Promise<CrawlResult> {
     const startTime = Date.now();
-    const fetchFn = options.fetch || this.config.fetch || globalThis.fetch;
+    const fetchFn = options.fetch ?? this.config.fetch;
     const timeoutMs = options.timeoutMs ?? this.config.timeoutMs ?? 15000;
     const userAgent = options.userAgent || this.config.userAgent || 'NymrelCrawlerMesh/1.0';
     const respectRobots = options.respectRobots ?? this.config.respectRobots ?? true;
     const useCache = options.cache ?? this.config.cache ?? true;
+    const networkOptions = {
+      allowPrivateNetworks: options.allowPrivateNetworks ?? this.config.allowPrivateNetworks,
+      maxResponseBytes: options.maxResponseBytes ?? this.config.maxResponseBytes,
+      maxRedirects: options.maxRedirects ?? this.config.maxRedirects,
+      resolveHostname: options.resolveHostname ?? this.config.resolveHostname
+    };
+
+    const safeUrl = await assertSafeHttpUrl(rawUrl, networkOptions);
 
     // 1. Check robots.txt
     if (respectRobots) {
-      const robots = await this.getRobotsParser(rawUrl);
+      const robots = await this.getRobotsParser(rawUrl, userAgent, fetchFn, networkOptions, timeoutMs);
       if (robots && !robots.isAllowed(rawUrl, userAgent)) {
-        throw new Error(`Crawl disallowed by robots.txt for URL: ${rawUrl}`);
+        throw new Error('Crawl disallowed by robots.txt');
       }
     }
 
@@ -165,9 +222,6 @@ export class CrawlerMesh extends EventEmitter {
     let contentType = 'text/html';
 
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
       const conditionalHeaders = useCache ? this.cache.getConditionalHeaders(rawUrl) : {};
 
       const reqHeaders: Record<string, string> = {
@@ -179,13 +233,14 @@ export class CrawlerMesh extends EventEmitter {
         ...conditionalHeaders
       };
 
-      response = await fetchFn(rawUrl, {
-        signal: controller.signal,
-        headers: reqHeaders,
-        redirect: 'follow'
+      const safeFetch = await fetchWithPolicy(safeUrl, { headers: reqHeaders }, {
+        fetch: fetchFn,
+        timeoutMs,
+        ...networkOptions
       });
+      response = safeFetch.response;
+      const finalUrl = safeFetch.finalUrl;
 
-      clearTimeout(timeout);
       statusCode = response.status;
       statusText = response.statusText;
 
@@ -199,6 +254,7 @@ export class CrawlerMesh extends EventEmitter {
       if (statusCode === 304) {
         const revalidatedEntry = await this.cache.get(rawUrl);
         if (revalidatedEntry) {
+          await response.body?.cancel();
           this.rateLimiter.release(rawUrl, 304);
           return {
             url: rawUrl,
@@ -224,12 +280,18 @@ export class CrawlerMesh extends EventEmitter {
       }
 
       if (!response.ok) {
-        this.rateLimiter.release(rawUrl, statusCode);
+        await response.body?.cancel();
         throw new Error(`HTTP ${statusCode} ${statusText}`);
       }
 
-      html = await response.text();
+      html = await readResponseText(
+        response,
+        networkOptions.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+      );
       this.rateLimiter.release(rawUrl, statusCode);
+
+      // Use the validated final redirect destination to resolve relative links.
+      safeUrl.href = finalUrl;
     } catch (err: any) {
       this.rateLimiter.release(rawUrl, statusCode || 500);
       throw err;
@@ -239,7 +301,7 @@ export class CrawlerMesh extends EventEmitter {
     const extraction = extractMarkdown(html, {
       ...this.config.extractorOptions,
       ...options.extractorOptions,
-      baseUrl: rawUrl
+      baseUrl: safeUrl.toString()
     });
 
     const contentHash = this.cache.computeHash(html);
@@ -322,13 +384,18 @@ export class CrawlerMesh extends EventEmitter {
 
     // Discover sitemap if configured
     if (effectiveConfig.includeSitemaps) {
-      for (const url of startUrls) {
+      const sitemapJobs = startUrls.map(async url => {
         try {
           const origin = new URL(url).origin;
           const sitemapUrl = `${origin}/sitemap.xml`;
           const sitemapData = await fetchAndParseSitemap(sitemapUrl, {
             fetch: effectiveConfig.fetch,
-            userAgent: effectiveConfig.userAgent
+            userAgent: effectiveConfig.userAgent,
+            timeoutMs: effectiveConfig.timeoutMs,
+            maxResponseBytes: effectiveConfig.maxResponseBytes,
+            maxRedirects: effectiveConfig.maxRedirects,
+            allowPrivateNetworks: effectiveConfig.allowPrivateNetworks,
+            resolveHostname: effectiveConfig.resolveHostname
           });
           for (const entry of sitemapData.urls) {
             queue.enqueue({ url: entry.loc, depth: 1 });
@@ -336,7 +403,8 @@ export class CrawlerMesh extends EventEmitter {
         } catch {
           // ignore sitemap discovery errors
         }
-      }
+      });
+      await Promise.all(sitemapJobs);
     }
 
     const results: CrawlResult[] = [];
@@ -344,17 +412,24 @@ export class CrawlerMesh extends EventEmitter {
     let errorCount = 0;
     const maxPages = effectiveConfig.maxPages ?? 50;
     const maxConcurrency = effectiveConfig.maxConcurrency ?? 5;
+    let reservedPages = 0;
+
+    const reserveNext = () => {
+      while (!queue.isEmpty() && reservedPages < maxPages) {
+        const item = queue.dequeue();
+        if (!item) return undefined;
+        if (queue.hasVisited(item.url)) continue;
+        queue.markVisited(item.url);
+        reservedPages += 1;
+        return item;
+      }
+      return undefined;
+    };
 
     const worker = async () => {
-      while (!queue.isEmpty() && results.length < maxPages) {
-        const item = queue.dequeue();
+      while (true) {
+        const item = reserveNext();
         if (!item) break;
-
-        if (queue.hasVisited(item.url)) {
-          continue;
-        }
-
-        queue.markVisited(item.url);
 
         try {
           const result = await this.crawlUrl(item.url, {
@@ -364,7 +439,11 @@ export class CrawlerMesh extends EventEmitter {
             cache: effectiveConfig.cache,
             headers: effectiveConfig.headers,
             extractorOptions: effectiveConfig.extractorOptions,
-            fetch: effectiveConfig.fetch
+            fetch: effectiveConfig.fetch,
+            allowPrivateNetworks: effectiveConfig.allowPrivateNetworks,
+            maxResponseBytes: effectiveConfig.maxResponseBytes,
+            maxRedirects: effectiveConfig.maxRedirects,
+            resolveHostname: effectiveConfig.resolveHostname
           });
 
           result.depth = item.depth;
@@ -442,25 +521,33 @@ export class CrawlerMesh extends EventEmitter {
     let cacheHits = 0;
 
     const startBench = Date.now();
-    const tasks = Array.from({ length: count }, async (_, i) => {
-      const iterStart = Date.now();
-      try {
-        const result = await this.crawlUrl(targetUrl, { cache: i > 0 });
-        const latency = Date.now() - iterStart;
-        latencies.push(latency);
-        extractionTimes.push(result.durationMs);
-        totalBytes += result.html.length;
-        if (result.fromCache) cacheHits++;
-        successCount++;
-      } catch {
-        failCount++;
-      }
-    });
-
-    // Run with concurrency pool
-    for (let i = 0; i < tasks.length; i += concurrency) {
-      await Promise.all(tasks.slice(i, i + concurrency));
+    if (!Number.isSafeInteger(count) || count <= 0 || !Number.isSafeInteger(concurrency) || concurrency <= 0) {
+      throw new TypeError('Benchmark count and concurrency must be positive safe integers');
     }
+
+    let nextIndex = 0;
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= count) return;
+
+        const iterStart = Date.now();
+        try {
+          const result = await this.crawlUrl(targetUrl, { cache: index > 0 });
+          const latency = Date.now() - iterStart;
+          latencies.push(latency);
+          extractionTimes.push(result.durationMs);
+          totalBytes += result.html.length;
+          if (result.fromCache) cacheHits++;
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(count, concurrency) }, () => worker()));
 
     const totalDurationMs = Math.max(1, Date.now() - startBench);
     latencies.sort((a, b) => a - b);

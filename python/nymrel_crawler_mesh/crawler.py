@@ -6,24 +6,22 @@ Copyright (c) 2026 Nymrel / JalenBuilds LLC
 
 import asyncio
 import time
-import urllib.error
-import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
-from .cache import ContentCache
+from .cache import ContentCache, compute_sha256
 from .extractor import extract_markdown
 from .models import (
     BenchmarkResult,
     CrawlResult,
     CrawlSummary,
     DocumentMetadata,
-    ExtractionResult,
 )
 from .queue import CrawlQueue, QueueItem
 from .rate_limiter import PoliteRateLimiter, extract_domain
 from .robots import RobotsParser
 from .sitemap import fetch_and_parse_sitemap
+from .network_policy import NetworkPolicy, Resolver, UrlOpener, fetch_http_text
 
 
 class CrawlerMesh:
@@ -44,6 +42,11 @@ class CrawlerMesh:
         denied_patterns: Optional[List[Union[str, Any]]] = None,
         include_sitemaps: bool = False,
         headers: Optional[Dict[str, str]] = None,
+        allow_private_networks: bool = False,
+        max_response_bytes: int = 10 * 1024 * 1024,
+        max_redirects: int = 5,
+        resolver: Optional[Resolver] = None,
+        url_opener: Optional[UrlOpener] = None,
     ):
         self.max_depth = max_depth
         self.max_pages = max_pages
@@ -57,6 +60,15 @@ class CrawlerMesh:
         self.allowed_domains = allowed_domains or []
         self.denied_patterns = denied_patterns or []
         self.headers = headers or {}
+        policy_args: Dict[str, Any] = {
+            "allow_private_networks": allow_private_networks,
+            "max_response_bytes": max_response_bytes,
+            "max_redirects": max_redirects,
+        }
+        if resolver is not None:
+            policy_args["resolver"] = resolver
+        self.network_policy = NetworkPolicy(**policy_args)
+        self.url_opener = url_opener
 
         self.cache = ContentCache(
             enabled=cache,
@@ -68,8 +80,10 @@ class CrawlerMesh:
             max_concurrency_per_domain=max_concurrency,
         )
         self.robots_cache: Dict[str, RobotsParser] = {}
+        self._robots_locks: Dict[str, asyncio.Lock] = {}
 
-    def _get_robots_parser(self, url_str: str) -> Optional[RobotsParser]:
+    async def _get_robots_parser(self, url_str: str) -> Optional[RobotsParser]:
+        """Resolve the robots.txt parser for a URL without blocking the event loop."""
         if not self.respect_robots:
             return None
 
@@ -82,26 +96,51 @@ class CrawlerMesh:
         if origin in self.robots_cache:
             return self.robots_cache[origin]
 
+        # Serialize per-origin so concurrent tasks share one fetch (cache semantics).
+        lock = self._robots_locks.get(origin)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._robots_locks[origin] = lock
+
+        async with lock:
+            if origin in self.robots_cache:
+                return self.robots_cache[origin]
+            # Blocking network I/O and parsing run on a worker thread. Shared
+            # crawler state is updated back on the event-loop thread.
+            parser, crawl_delay = await asyncio.to_thread(
+                self._fetch_robots_parser, origin
+            )
+            if crawl_delay is not None and crawl_delay > 0:
+                self.rate_limiter.set_domain_delay(extract_domain(url_str), crawl_delay)
+            self.robots_cache[origin] = parser
+            return parser
+
+    def _fetch_robots_parser(self, origin: str) -> tuple[RobotsParser, Optional[float]]:
+        """Synchronous robots.txt fetch/parse; must only run off the event loop."""
         robots_url = f"{origin}/robots.txt"
         parser = RobotsParser()
+        crawl_delay: Optional[float] = None
         try:
-            req = urllib.request.Request(
+            robots_policy = NetworkPolicy(
+                allow_private_networks=self.network_policy.allow_private_networks,
+                max_response_bytes=min(self.network_policy.max_response_bytes, 1024 * 1024),
+                max_redirects=self.network_policy.max_redirects,
+                resolver=self.network_policy.resolver,
+            )
+            document = fetch_http_text(
                 robots_url,
                 headers={"User-Agent": self.user_agent},
+                timeout_sec=min(self.timeout_sec, 5.0),
+                policy=robots_policy,
+                opener=self.url_opener,
             )
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                text = resp.read().decode("utf-8", errors="replace")
-                parser.parse(text)
-
+            if 200 <= document.status < 300:
+                parser.parse(document.text)
                 crawl_delay = parser.get_crawl_delay(self.user_agent)
-                if crawl_delay is not None and crawl_delay > 0:
-                    domain = extract_domain(url_str)
-                    self.rate_limiter.set_domain_delay(domain, crawl_delay)
         except Exception:
             pass
 
-        self.robots_cache[origin] = parser
-        return parser
+        return parser, crawl_delay
 
     async def crawl_url(
         self,
@@ -115,15 +154,17 @@ class CrawlerMesh:
         should_cache = use_cache if use_cache is not None else self.cache.enabled
         check_robots = respect_robots if respect_robots is not None else self.respect_robots
 
+        await asyncio.to_thread(self.network_policy.validate_url, raw_url)
+
         # 1. Robots.txt check
         if check_robots:
-            robots = self._get_robots_parser(raw_url)
+            robots = await self._get_robots_parser(raw_url)
             if robots and not robots.is_allowed(raw_url, self.user_agent):
-                raise PermissionError(f"Crawl disallowed by robots.txt: {raw_url}")
+                raise PermissionError("Crawl disallowed by robots.txt")
 
         # 2. Cache check
         if should_cache:
-            cached = self.cache.get(raw_url)
+            cached = await asyncio.to_thread(self.cache.get, raw_url)
             if cached:
                 meta = cached.get("metadata", {})
                 doc_meta = DocumentMetadata(**meta) if isinstance(meta, dict) else DocumentMetadata()
@@ -153,32 +194,33 @@ class CrawlerMesh:
             **self.headers,
         }
         if should_cache:
-            req_headers.update(self.cache.get_conditional_headers(raw_url))
+            req_headers.update(await asyncio.to_thread(self.cache.get_conditional_headers, raw_url))
 
-        req = urllib.request.Request(raw_url, headers=req_headers)
         status_code = 0
         status_text = ""
         resp_headers: Dict[str, str] = {}
         html = ""
+        final_url = raw_url
 
         try:
-            loop = asyncio.get_event_loop()
-            resp = await loop.run_in_executor(
-                None, lambda: urllib.request.urlopen(req, timeout=timeout)
+            document = await asyncio.to_thread(
+                fetch_http_text,
+                raw_url,
+                headers=req_headers,
+                timeout_sec=timeout,
+                policy=self.network_policy,
+                opener=self.url_opener,
             )
-            status_code = resp.status
-            status_text = resp.reason
-            for k, v in resp.headers.items():
-                resp_headers[k.lower()] = v
-            html = resp.read().decode("utf-8", errors="replace")
-            self.rate_limiter.release(raw_url, status_code)
-        except urllib.error.HTTPError as err:
-            status_code = err.code
-            status_text = err.reason
-            self.rate_limiter.release(raw_url, status_code)
+            status_code = document.status
+            status_text = document.reason
+            resp_headers = document.headers
+            html = document.text
+            final_url = document.final_url
+
             if status_code == 304:
-                cached = self.cache.get(raw_url)
+                cached = await asyncio.to_thread(self.cache.get, raw_url)
                 if cached:
+                    self.rate_limiter.release(raw_url, status_code)
                     meta = cached.get("metadata", {})
                     doc_meta = DocumentMetadata(**meta) if isinstance(meta, dict) else DocumentMetadata()
                     return CrawlResult(
@@ -197,15 +239,17 @@ class CrawlerMesh:
                         metadata=doc_meta,
                         canonical_url=doc_meta.canonical,
                     )
-            raise err
+            if status_code >= 400:
+                raise RuntimeError(f"Crawler request failed with HTTP {status_code}")
+            self.rate_limiter.release(raw_url, status_code)
         except Exception as err:
-            self.rate_limiter.release(raw_url, 500)
+            self.rate_limiter.release(raw_url, status_code or 500)
             raise err
 
         # 4. Extract
-        extraction = extract_markdown(html, base_url=raw_url)
+        extraction = await asyncio.to_thread(extract_markdown, html, base_url=final_url)
         duration_ms = (time.time() - start_time) * 1000.0
-        content_hash = self.cache.set(raw_url, {
+        cache_data = {
             "status_code": status_code,
             "status_text": status_text,
             "headers": resp_headers,
@@ -216,7 +260,12 @@ class CrawlerMesh:
             "metadata": extraction.metadata.__dict__,
             "etag": resp_headers.get("etag"),
             "last_modified": resp_headers.get("last-modified"),
-        }).get("hash", "")
+        }
+        if should_cache:
+            cache_entry = await asyncio.to_thread(self.cache.set, raw_url, cache_data)
+            content_hash = cache_entry.get("hash", "")
+        else:
+            content_hash = compute_sha256(html)
 
         return CrawlResult(
             url=raw_url,
@@ -272,22 +321,43 @@ class CrawlerMesh:
             queue.enqueue(QueueItem(url=u, depth=0))
 
         if self.include_sitemaps:
+            sitemap_jobs = []
             for u in start_urls:
                 try:
                     origin = f"{urlparse(u).scheme}://{urlparse(u).netloc}"
-                    sitemap_res = fetch_and_parse_sitemap(f"{origin}/sitemap.xml", user_agent=self.user_agent)
-                    for entry in sitemap_res.urls:
-                        queue.enqueue(QueueItem(url=entry.loc, depth=1))
+                    sitemap_jobs.append(
+                        asyncio.to_thread(
+                            fetch_and_parse_sitemap,
+                            f"{origin}/sitemap.xml",
+                            user_agent=self.user_agent,
+                            timeout_sec=self.timeout_sec,
+                            policy=self.network_policy,
+                            opener=self.url_opener,
+                        )
+                    )
                 except Exception:
                     pass
+
+            if sitemap_jobs:
+                # Fetch/parse off the event loop; independent origins overlap.
+                sitemap_results = await asyncio.gather(*sitemap_jobs, return_exceptions=True)
+                for sitemap_res in sitemap_results:
+                    try:
+                        if isinstance(sitemap_res, BaseException):
+                            raise sitemap_res
+                        for entry in sitemap_res.urls:
+                            queue.enqueue(QueueItem(url=entry.loc, depth=1))
+                    except Exception:
+                        pass
 
         results: List[CrawlResult] = []
         cached_count = 0
         error_count = 0
+        reserved_pages = 0
 
         async def worker():
-            nonlocal cached_count, error_count
-            while not queue.is_empty() and len(results) < eff_max_pages:
+            nonlocal cached_count, error_count, reserved_pages
+            while not queue.is_empty() and reserved_pages < eff_max_pages:
                 item = queue.dequeue()
                 if not item:
                     break
@@ -296,6 +366,7 @@ class CrawlerMesh:
                     continue
 
                 queue.mark_visited(item.url)
+                reserved_pages += 1
 
                 try:
                     res = await self.crawl_url(item.url)
@@ -311,7 +382,7 @@ class CrawlerMesh:
                         for link in res.links:
                             if link.is_internal and link.href:
                                 queue.enqueue(QueueItem(url=link.href, depth=item.depth + 1, referrer=item.url))
-                except Exception as err:
+                except Exception:
                     error_count += 1
 
         workers = [worker() for _ in range(self.max_concurrency)]
@@ -342,11 +413,19 @@ class CrawlerMesh:
         cache_hits = 0
 
         start_bench = time.time()
-        sem = asyncio.Semaphore(concurrency)
+        if count <= 0 or concurrency <= 0:
+            raise ValueError("Benchmark count and concurrency must be positive")
 
-        async def run_single(idx: int):
+        next_index = 0
+
+        async def run_worker():
+            nonlocal next_index
             nonlocal success_count, fail_count, total_bytes, cache_hits
-            async with sem:
+            while True:
+                idx = next_index
+                next_index += 1
+                if idx >= count:
+                    return
                 t0 = time.time()
                 try:
                     res = await self.crawl_url(target_url, use_cache=idx > 0)
@@ -360,8 +439,8 @@ class CrawlerMesh:
                 except Exception:
                     fail_count += 1
 
-        tasks = [run_single(i) for i in range(count)]
-        await asyncio.gather(*tasks)
+        workers = [run_worker() for _ in range(min(count, concurrency))]
+        await asyncio.gather(*workers)
 
         total_duration_ms = max(1.0, (time.time() - start_bench) * 1000.0)
         latencies.sort()

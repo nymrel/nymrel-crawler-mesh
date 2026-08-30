@@ -5,6 +5,12 @@
  */
 
 import type { SitemapEntry, SitemapResult } from './types.js';
+import {
+  DEFAULT_MAX_RESPONSE_BYTES,
+  fetchWithPolicy,
+  readResponseText,
+  type NetworkPolicyOptions
+} from './network-policy.js';
 
 export function parseSitemapXml(xmlContent: string): SitemapResult {
   const result: SitemapResult = {
@@ -53,69 +59,94 @@ export function parseSitemapXml(xmlContent: string): SitemapResult {
   return result;
 }
 
+export interface SitemapFetchOptions extends NetworkPolicyOptions {
+  userAgent?: string;
+  timeoutMs?: number;
+  maxDepth?: number;
+  maxSitemaps?: number;
+  maxUrls?: number;
+  fetch?: typeof globalThis.fetch;
+}
+
+interface SitemapTraversalState {
+  visited: Set<string>;
+  seenUrls: Set<string>;
+  maxSitemaps: number;
+  maxUrls: number;
+}
+
 export async function fetchAndParseSitemap(
   sitemapUrl: string,
-  options: {
-    userAgent?: string;
-    timeoutMs?: number;
-    maxDepth?: number;
-    currentDepth?: number;
-    fetch?: typeof globalThis.fetch;
-  } = {}
+  options: SitemapFetchOptions = {}
 ): Promise<SitemapResult> {
-  const fetchFn = options.fetch || globalThis.fetch;
-  const maxDepth = options.maxDepth ?? 2;
-  const currentDepth = options.currentDepth ?? 0;
+  const state: SitemapTraversalState = {
+    visited: new Set(),
+    seenUrls: new Set(),
+    maxSitemaps: Math.max(1, options.maxSitemaps ?? 100),
+    maxUrls: Math.max(1, options.maxUrls ?? 50_000)
+  };
+  return fetchSitemapTree(sitemapUrl, options, state, 0);
+}
 
-  const combinedResult: SitemapResult = {
+async function fetchSitemapTree(
+  sitemapUrl: string,
+  options: SitemapFetchOptions,
+  state: SitemapTraversalState,
+  currentDepth: number
+): Promise<SitemapResult> {
+  const result: SitemapResult = {
     urls: [],
     sitemaps: [],
     errors: []
   };
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15000);
+  if (state.visited.has(sitemapUrl) || state.visited.size >= state.maxSitemaps) return result;
+  state.visited.add(sitemapUrl);
 
-    const response = await fetchFn(sitemapUrl, {
-      signal: controller.signal,
+  try {
+    const { response } = await fetchWithPolicy(sitemapUrl, {
       headers: {
         'User-Agent': options.userAgent || 'NymrelCrawlerMesh/1.0 (+https://github.com/nymrel/nymrel-crawler-mesh)',
         'Accept': 'application/xml, text/xml, */*'
       }
-    });
-
-    clearTimeout(timeout);
+    }, options);
 
     if (!response.ok) {
-      combinedResult.errors.push(`HTTP ${response.status} fetching sitemap ${sitemapUrl}`);
-      return combinedResult;
+      await response.body?.cancel();
+      result.errors.push(`Sitemap request failed with HTTP ${response.status}`);
+      return result;
     }
 
-    const xml = await response.text();
+    const xml = await readResponseText(
+      response,
+      options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+    );
     const parsed = parseSitemapXml(xml);
 
-    combinedResult.urls.push(...parsed.urls);
-    combinedResult.sitemaps.push(...parsed.sitemaps);
+    for (const entry of parsed.urls) {
+      if (state.seenUrls.size >= state.maxUrls) break;
+      if (state.seenUrls.has(entry.loc)) continue;
+      state.seenUrls.add(entry.loc);
+      result.urls.push(entry);
+    }
+    const remainingSitemaps = Math.max(0, state.maxSitemaps - state.visited.size);
+    const childSitemaps = parsed.sitemaps.slice(0, remainingSitemaps);
+    result.sitemaps.push(...childSitemaps);
 
     // Recursively parse child sitemaps if under maxDepth
-    if (parsed.sitemaps.length > 0 && currentDepth < maxDepth) {
-      for (const childSitemap of parsed.sitemaps) {
-        try {
-          const childResult = await fetchAndParseSitemap(childSitemap, {
-            ...options,
-            currentDepth: currentDepth + 1
-          });
-          combinedResult.urls.push(...childResult.urls);
-          combinedResult.errors.push(...childResult.errors);
-        } catch (err: any) {
-          combinedResult.errors.push(`Error fetching child sitemap ${childSitemap}: ${err.message}`);
-        }
+    if (childSitemaps.length > 0 && currentDepth < (options.maxDepth ?? 2)) {
+      const childResults = await Promise.all(
+        childSitemaps.map(child => fetchSitemapTree(child, options, state, currentDepth + 1))
+      );
+      for (const childResult of childResults) {
+        result.urls.push(...childResult.urls);
+        result.errors.push(...childResult.errors);
       }
     }
-  } catch (err: any) {
-    combinedResult.errors.push(`Failed to fetch sitemap ${sitemapUrl}: ${err.message}`);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.name : 'UnknownError';
+    result.errors.push(`Sitemap request failed: ${reason}`);
   }
 
-  return combinedResult;
+  return result;
 }

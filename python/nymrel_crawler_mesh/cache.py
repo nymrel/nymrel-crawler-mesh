@@ -7,12 +7,10 @@ Copyright (c) 2026 Nymrel / JalenBuilds LLC
 import hashlib
 import json
 import os
+import threading
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-
-from .models import CrawlResult, DocumentMetadata
-
 
 def compute_sha256(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -52,6 +50,7 @@ class ContentCache:
         self.in_memory = in_memory
         self.max_memory_entries = max_memory_entries
         self.memory_store: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.RLock()
 
     def get_disk_path(self, url_key: str) -> tuple[str, str]:
         h = compute_sha256(url_key)
@@ -61,6 +60,10 @@ class ContentCache:
         return meta_path, body_path
 
     def get(self, raw_url: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return self._get_unlocked(raw_url)
+
+    def _get_unlocked(self, raw_url: str) -> Optional[Dict[str, Any]]:
         if not self.enabled:
             return None
 
@@ -102,6 +105,10 @@ class ContentCache:
             return None
 
     def set(self, raw_url: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            return self._set_unlocked(raw_url, data)
+
+    def _set_unlocked(self, raw_url: str, data: Dict[str, Any]) -> Dict[str, Any]:
         if not self.enabled:
             return data
 
@@ -146,6 +153,10 @@ class ContentCache:
         return self.get(raw_url) is not None
 
     def delete(self, raw_url: str) -> bool:
+        with self._lock:
+            return self._delete_unlocked(raw_url)
+
+    def _delete_unlocked(self, raw_url: str) -> bool:
         url_key = normalize_url_key(raw_url)
         self.memory_store.pop(url_key, None)
 
@@ -163,6 +174,10 @@ class ContentCache:
         return True
 
     def clear(self) -> None:
+        with self._lock:
+            self._clear_unlocked()
+
+    def _clear_unlocked(self) -> None:
         self.memory_store.clear()
         if not self.in_memory and os.path.exists(self.cache_dir):
             import shutil

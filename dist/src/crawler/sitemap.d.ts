@@ -4,12 +4,15 @@
  * Copyright (c) 2026 Nymrel / JalenBuilds LLC
  */
 import type { SitemapResult } from './types.js';
+import { type NetworkPolicyOptions } from './network-policy.js';
 export declare function parseSitemapXml(xmlContent: string): SitemapResult;
-export declare function fetchAndParseSitemap(sitemapUrl: string, options?: {
+export interface SitemapFetchOptions extends NetworkPolicyOptions {
     userAgent?: string;
     timeoutMs?: number;
     maxDepth?: number;
-    currentDepth?: number;
+    maxSitemaps?: number;
+    maxUrls?: number;
     fetch?: typeof globalThis.fetch;
-}): Promise<SitemapResult>;
+}
+export declare function fetchAndParseSitemap(sitemapUrl: string, options?: SitemapFetchOptions): Promise<SitemapResult>;
 //# sourceMappingURL=sitemap.d.ts.map

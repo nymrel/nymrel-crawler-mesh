@@ -9,13 +9,14 @@ import * as path from 'node:path';
 import { CrawlerMesh } from './crawler/mesh.js';
 import { extractMarkdown } from './extractor/index.js';
 import { fetchAndParseSitemap, parseSitemapXml } from './crawler/sitemap.js';
+import { fetchWithPolicy, readResponseText } from './crawler/network-policy.js';
 
 const VERSION = '1.0.0';
 
 export function printHelp(): void {
   console.log(`
 \x1b[1m\x1b[36mnymrel-crawler-mesh\x1b[0m v${VERSION}
-Zero-Telemetry High-Throughput Web Crawler & Markdown/JSON Extractor for AI Agents
+Bounded, Zero-Telemetry HTTP Crawler & Markdown/JSON Extractor
 
 \x1b[1mUSAGE:\x1b[0m
   crawler-mesh <command> [options]
@@ -24,7 +25,7 @@ Zero-Telemetry High-Throughput Web Crawler & Markdown/JSON Extractor for AI Agen
   \x1b[32mcrawl\x1b[0m <url>        Crawl a URL or entire site recursively
   \x1b[32mextract\x1b[0m <url|file> Extract clean Markdown or JSON from URL, file, or stdin (-)
   \x1b[32msitemap\x1b[0m <url>      Parse XML sitemap or sitemap index
-  \x1b[32mbench\x1b[0m <url>        Run high-throughput performance benchmark
+  \x1b[32mbench\x1b[0m <url>        Run a bounded request benchmark
   \x1b[32mversion\x1b[0m            Print version information
   \x1b[32mhelp\x1b[0m               Show this help message
 
@@ -39,6 +40,7 @@ Zero-Telemetry High-Throughput Web Crawler & Markdown/JSON Extractor for AI Agen
   --ignore-robots       Bypass robots.txt checks
   --user-agent <str>    Custom User-Agent header
   --sitemaps            Auto-discover and ingest sitemaps
+  --allow-private-networks  Opt in to loopback/private network targets
   --silent              Suppress progress logs
   --verbose             Verbose logging
 
@@ -115,6 +117,7 @@ async function handleCrawl(args: string[]): Promise<number> {
   const includeSitemaps = args.includes('--sitemaps');
   const silent = args.includes('--silent');
   const verbose = args.includes('--verbose');
+  const allowPrivateNetworks = args.includes('--allow-private-networks');
 
   if (!silent) {
     console.log(`\x1b[1m\x1b[36m=== Starting Crawler Mesh ===\x1b[0m`);
@@ -132,7 +135,8 @@ async function handleCrawl(args: string[]): Promise<number> {
     cache: !noCache,
     respectRobots: !ignoreRobots,
     userAgent,
-    includeSitemaps
+    includeSitemaps,
+    allowPrivateNetworks
   });
 
   if (!silent) {
@@ -203,14 +207,18 @@ async function handleExtract(args: string[]): Promise<number> {
     rawHtml = Buffer.concat(chunks).toString('utf-8');
   } else if (target.startsWith('http://') || target.startsWith('https://')) {
     baseUrl = target;
-    const res = await fetch(target, {
+    const { response, finalUrl } = await fetchWithPolicy(target, {
       headers: { 'User-Agent': 'NymrelCrawlerMesh/1.0 AI Data Engine' }
+    }, {
+      allowPrivateNetworks: args.includes('--allow-private-networks')
     });
-    if (!res.ok) {
-      console.error(`Failed to fetch ${target}: HTTP ${res.status}`);
+    if (!response.ok) {
+      await response.body?.cancel();
+      console.error(`Remote extraction failed: HTTP ${response.status}`);
       return 1;
     }
-    rawHtml = await res.text();
+    baseUrl = finalUrl;
+    rawHtml = await readResponseText(response);
   } else {
     rawHtml = await fs.readFile(target, 'utf-8');
   }
@@ -248,7 +256,9 @@ async function handleSitemap(args: string[]): Promise<number> {
 
   let result;
   if (url.startsWith('http://') || url.startsWith('https://')) {
-    result = await fetchAndParseSitemap(url);
+    result = await fetchAndParseSitemap(url, {
+      allowPrivateNetworks: args.includes('--allow-private-networks')
+    });
   } else {
     const content = await fs.readFile(url, 'utf-8');
     result = parseSitemapXml(content);
@@ -277,7 +287,9 @@ async function handleSitemap(args: string[]): Promise<number> {
   if (doCrawl && result.urls.length > 0) {
     const urlsToCrawl = result.urls.map(u => u.loc);
     console.log(`\nLaunching crawler mesh on ${urlsToCrawl.length} sitemap URLs...`);
-    const mesh = new CrawlerMesh();
+    const mesh = new CrawlerMesh({
+      allowPrivateNetworks: args.includes('--allow-private-networks')
+    });
     const summary = await mesh.crawl(urlsToCrawl);
     console.log(`Finished crawling sitemap URLs. Total crawled: ${summary.totalCrawled}`);
   }
@@ -300,7 +312,9 @@ async function handleBench(args: string[]): Promise<number> {
   console.log(`Requests:    ${count} total requests`);
   console.log(`Concurrency: ${concurrency} parallel workers\n`);
 
-  const mesh = new CrawlerMesh();
+  const mesh = new CrawlerMesh({
+    allowPrivateNetworks: args.includes('--allow-private-networks')
+  });
   const bench = await mesh.benchmark(url, count, concurrency);
 
   console.log(`\x1b[1m\x1b[32m=== Benchmark Results ===\x1b[0m`);

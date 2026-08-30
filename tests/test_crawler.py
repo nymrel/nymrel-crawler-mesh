@@ -4,7 +4,6 @@ Test suite for Python CrawlerMesh and CrawlQueue
 """
 
 import unittest
-from nymrel_crawler_mesh.crawler import CrawlerMesh
 from nymrel_crawler_mesh.queue import CrawlQueue, QueueItem, is_url_allowed
 from nymrel_crawler_mesh.sitemap import parse_sitemap_xml
 

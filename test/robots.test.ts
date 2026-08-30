@@ -8,7 +8,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { RobotsParser } from '../src/crawler/robots.js';
 
-describe('RFC 9309 Compliant RobotsParser', () => {
+describe('Robots.txt path matcher', () => {
   const robotsTxt = `
     User-agent: *
     Disallow: /admin/

@@ -10,8 +10,11 @@ export declare class CrawlerMesh extends EventEmitter {
     private cache;
     private rateLimiter;
     private robotsCache;
+    private robotsInFlight;
     constructor(options?: CrawlOptions);
+    private applyRobotsDelay;
     private getRobotsParser;
+    private loadRobotsParser;
     crawlUrl(rawUrl: string, options?: SingleCrawlOptions): Promise<CrawlResult>;
     crawl(startUrl: string | string[], options?: Partial<CrawlOptions>): Promise<CrawlSummary>;
     crawlStream(startUrl: string | string[], options?: Partial<CrawlOptions>): AsyncIterable<CrawlResult>;

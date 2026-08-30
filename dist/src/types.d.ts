@@ -38,6 +38,14 @@ export interface CrawlOptions {
     headers?: Record<string, string>;
     /** Custom fetch implementation */
     fetch?: typeof globalThis.fetch;
+    /** Allow private, loopback, link-local, and other non-global targets. Default: false */
+    allowPrivateNetworks?: boolean;
+    /** Maximum response body size in bytes. Default: 10485760 (10 MiB) */
+    maxResponseBytes?: number;
+    /** Maximum redirects followed after validating every destination. Default: 5 */
+    maxRedirects?: number;
+    /** Resolver override for deterministic tests and controlled runtimes */
+    resolveHostname?: (hostname: string) => Promise<string[]>;
 }
 export interface SingleCrawlOptions {
     timeoutMs?: number;
@@ -49,6 +57,10 @@ export interface SingleCrawlOptions {
     headers?: Record<string, string>;
     extractorOptions?: ExtractorOptions;
     fetch?: typeof globalThis.fetch;
+    allowPrivateNetworks?: boolean;
+    maxResponseBytes?: number;
+    maxRedirects?: number;
+    resolveHostname?: (hostname: string) => Promise<string[]>;
 }
 export interface CrawlResult {
     url: string;

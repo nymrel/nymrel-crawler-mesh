@@ -4,7 +4,7 @@ Test suite for Python semantic HTML extractor
 """
 
 import unittest
-from nymrel_crawler_mesh.extractor import extract_markdown, extract_metadata, clean_html
+from nymrel_crawler_mesh.extractor import extract_markdown
 
 
 class TestExtractor(unittest.TestCase):
