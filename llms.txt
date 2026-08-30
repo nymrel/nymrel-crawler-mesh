@@ -1,49 +1,57 @@
 # nymrel-crawler-mesh
 
-> Zero-telemetry, high-throughput web crawler & semantic Markdown/JSON extractor built specifically for AI agents, LLM pipelines, and RAG architectures.
+Nymrel maintains this source repository for a bounded HTTP crawler and HTML-to-Markdown/JSON extractor with TypeScript and Python engines.
 
-- Organization: Nymrel (Parent Entity: JalenBuilds LLC)
+## Verified repository facts
+
 - Repository: https://github.com/nymrel/nymrel-crawler-mesh
 - License: MIT
-- Runtimes: Node.js (TypeScript) & Python 3.9+
-- Zero Telemetry: 100% local compute, no phone-home tracking.
+- Node.js: `package.json` requires 22.19 or newer; the checked-in CI matrix targets Node.js 22, 24, and 26
+- Python: `pyproject.toml` requires 3.11 or newer and is the sole Python packaging authority; the checked-in CI matrix targets Python 3.11 through 3.14
+- TypeScript: 7
+- Telemetry: the project adds no analytics, usage telemetry, or Nymrel service calls
+- Distribution: as of 2026-08-29, neither `@nymrel/crawler-mesh` on npm nor `nymrel-crawler-mesh` on PyPI has a verified public release
 
-## Core Capabilities
+Registry names, release workflows, local archives, checksums, and attestations do not establish public package availability. npm/PyPI publication and trusted-publisher configuration remain separate provider gates.
 
-- **High-Throughput Crawling**: Asynchronous concurrency worker pool with FIFO queue, domain deduplication, and max-depth bounds.
-- **Polite Rate Limiting**: Per-domain token bucket delay and exponential backoff with jitter on HTTP 429/503.
-- **RFC 9309 Robots.txt**: Full support for wildcard `*` and `$` patterns, user-agent rule groups, crawl-delay, and sitemap discovery.
-- **XML Sitemap Engine**: Automated ingestion of standard sitemaps and recursive `<sitemapindex>` hierarchies.
-- **Clean Markdown AST Extractor**: Strips scripts, styles, navbars, ads, cookie banners, tracking pixels, and footers while preserving headings (`#`), tables (`|`), code blocks (````lang````), lists (`-`), and links (`[text](url)`).
-- **SHA-256 Content-Hash Cache**: Automatic deduplication and HTTP 304 conditional request acceleration.
+## Supported capability boundary
 
-## Quick CLI Usage
+- Crawl one page or a bounded same-domain queue with explicit depth, page, concurrency, delay, timeout, response-size, and redirect limits.
+- Read `robots.txt` by default and ingest bounded sitemap trees. Robots handling is coordination behavior, not authorization.
+- Reject non-HTTP schemes and URLs with embedded credentials.
+- Reject non-global destinations by default, including on redirects; private-network access requires an explicit opt-in.
+- Pin built-in HTTP connections to the validated address set while preserving hostname semantics for HTTP and TLS.
+- Remove sensitive request headers on cross-origin redirects.
+- Extract headings, metadata, links, images, tables, code blocks, text, and Markdown without executing page JavaScript.
+- Optionally cache fetched content on the local filesystem using SHA-256 content hashes.
+
+The TypeScript and Python engines expose similar core behavior, but exact byte-for-byte feature parity is not promised. Their tests define the supported contracts.
+
+## Interfaces
+
+- TypeScript package source: `@nymrel/crawler-mesh`
+- TypeScript CLI: `crawler-mesh`
+- Python package source: `nymrel_crawler_mesh`
+- Python CLI: `crawler-mesh-py`
+- Primary documentation: `README.md`
+- Security boundary and reporting: `SECURITY.md`
+
+## Source verification
 
 ```bash
-# Crawl recursive domain
-crawler-mesh crawl https://docs.example.com --max-depth 2 --output ./crawled
-
-# Extract clean markdown from URL or HTML file
-crawler-mesh extract https://example.com/article --format md
-
-# Benchmark server throughput
-crawler-mesh bench https://example.com --requests 50 --concurrency 10
+npm ci --ignore-scripts
+npm run check
+npm audit --audit-level=high
+npm pack --dry-run --ignore-scripts
 ```
 
-## Quick SDK Usage
-
-### TypeScript
-```typescript
-import { CrawlerMesh, extractMarkdown, crawlUrl } from '@nymrel/crawler-mesh';
-
-const mesh = new CrawlerMesh({ maxConcurrency: 5, maxDepth: 2 });
-const summary = await mesh.crawl('https://docs.example.com');
+```powershell
+$env:PYTHONPATH = (Resolve-Path '.\python').Path
+python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-### Python
-```python
-from nymrel_crawler_mesh import CrawlerMesh, extract_markdown, crawl_url
+Install the Python source with a PEP 517 frontend such as `python -m pip install .`; do not invoke a legacy `setup.py` path.
 
-mesh = CrawlerMesh(max_concurrency=5, max_depth=2)
-summary = mesh.crawl_sync('https://docs.example.com')
-```
+## Trust limits
+
+Crawling sends ordinary HTTP requests to selected targets, and optional caching persists fetched content locally. Custom resolver, fetch, or URL-opener implementations replace part of the built-in network boundary and become trusted policy dependencies. This library is not a network sandbox, browser, login automation system, access-control bypass, malware scanner, or HTML sanitizer for later browser rendering. Use outbound network controls and runtime isolation for hostile or multi-tenant inputs.
