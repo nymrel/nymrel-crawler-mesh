@@ -68,8 +68,10 @@ class CrawlerMesh:
             max_concurrency_per_domain=max_concurrency,
         )
         self.robots_cache: Dict[str, RobotsParser] = {}
+        self._robots_locks: Dict[str, asyncio.Lock] = {}
 
-    def _get_robots_parser(self, url_str: str) -> Optional[RobotsParser]:
+    async def _get_robots_parser(self, url_str: str) -> Optional[RobotsParser]:
+        """Resolve the robots.txt parser for a URL without blocking the event loop."""
         if not self.respect_robots:
             return None
 
@@ -82,6 +84,20 @@ class CrawlerMesh:
         if origin in self.robots_cache:
             return self.robots_cache[origin]
 
+        # Serialize per-origin so concurrent tasks share one fetch (cache semantics).
+        lock = self._robots_locks.get(origin)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._robots_locks[origin] = lock
+
+        async with lock:
+            if origin in self.robots_cache:
+                return self.robots_cache[origin]
+            # Blocking network I/O and parsing run on a worker thread.
+            return await asyncio.to_thread(self._fetch_robots_parser, url_str, origin)
+
+    def _fetch_robots_parser(self, url_str: str, origin: str) -> RobotsParser:
+        """Synchronous robots.txt fetch/parse; must only run off the event loop."""
         robots_url = f"{origin}/robots.txt"
         parser = RobotsParser()
         try:
@@ -117,7 +133,7 @@ class CrawlerMesh:
 
         # 1. Robots.txt check
         if check_robots:
-            robots = self._get_robots_parser(raw_url)
+            robots = await self._get_robots_parser(raw_url)
             if robots and not robots.is_allowed(raw_url, self.user_agent):
                 raise PermissionError(f"Crawl disallowed by robots.txt: {raw_url}")
 
@@ -272,14 +288,31 @@ class CrawlerMesh:
             queue.enqueue(QueueItem(url=u, depth=0))
 
         if self.include_sitemaps:
+            sitemap_jobs = []
             for u in start_urls:
                 try:
                     origin = f"{urlparse(u).scheme}://{urlparse(u).netloc}"
-                    sitemap_res = fetch_and_parse_sitemap(f"{origin}/sitemap.xml", user_agent=self.user_agent)
-                    for entry in sitemap_res.urls:
-                        queue.enqueue(QueueItem(url=entry.loc, depth=1))
+                    sitemap_jobs.append(
+                        asyncio.to_thread(
+                            fetch_and_parse_sitemap,
+                            f"{origin}/sitemap.xml",
+                            user_agent=self.user_agent,
+                        )
+                    )
                 except Exception:
                     pass
+
+            if sitemap_jobs:
+                # Fetch/parse off the event loop; independent origins overlap.
+                sitemap_results = await asyncio.gather(*sitemap_jobs, return_exceptions=True)
+                for sitemap_res in sitemap_results:
+                    try:
+                        if isinstance(sitemap_res, BaseException):
+                            raise sitemap_res
+                        for entry in sitemap_res.urls:
+                            queue.enqueue(QueueItem(url=entry.loc, depth=1))
+                    except Exception:
+                        pass
 
         results: List[CrawlResult] = []
         cached_count = 0
