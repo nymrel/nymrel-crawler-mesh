@@ -10,6 +10,7 @@ import { CrawlerMesh } from '../src/crawler/mesh.js';
 import { parseSitemapXml } from '../src/crawler/sitemap.js';
 
 describe('CrawlerMesh Core Engine', () => {
+  const resolvePublicTestHost = async () => ['93.184.216.34'];
   // Mock fetch handler
   const mockFetch: typeof globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const urlStr = input.toString();
@@ -81,7 +82,8 @@ describe('CrawlerMesh Core Engine', () => {
     const mesh = new CrawlerMesh({
       fetch: mockFetch,
       cache: false,
-      delayMs: 0
+      delayMs: 0,
+      resolveHostname: resolvePublicTestHost
     });
 
     const result = await mesh.crawlUrl('https://example.com');
@@ -98,7 +100,8 @@ describe('CrawlerMesh Core Engine', () => {
       fetch: mockFetch,
       cache: false,
       maxDepth: 1,
-      delayMs: 0
+      delayMs: 0,
+      resolveHostname: resolvePublicTestHost
     });
 
     const summary = await mesh.crawl('https://example.com');
@@ -114,7 +117,8 @@ describe('CrawlerMesh Core Engine', () => {
   it('runs throughput benchmark calculation correctly', async () => {
     const mesh = new CrawlerMesh({
       fetch: mockFetch,
-      delayMs: 0
+      delayMs: 0,
+      resolveHostname: resolvePublicTestHost
     });
 
     const bench = await mesh.benchmark('https://example.com', 5, 2);

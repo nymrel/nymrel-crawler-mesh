@@ -4,7 +4,8 @@
  * Copyright (c) 2026 Nymrel / JalenBuilds LLC
  */
 import { CrawlerMesh } from './crawler/mesh.js';
-import { parseSitemapXml } from './crawler/sitemap.js';
+import { extractMarkdown } from './extractor/index.js';
+import { parseSitemapXml, fetchAndParseSitemap } from './crawler/sitemap.js';
 // Re-export all subsystems and types
 export * from './types.js';
 export * from './cache/index.js';
@@ -24,7 +25,11 @@ export async function crawlUrl(url, options = {}) {
         respectRobots: options.respectRobots,
         headers: options.headers,
         extractorOptions: options.extractorOptions,
-        fetch: options.fetch
+        fetch: options.fetch,
+        allowPrivateNetworks: options.allowPrivateNetworks,
+        maxResponseBytes: options.maxResponseBytes,
+        maxRedirects: options.maxRedirects,
+        resolveHostname: options.resolveHostname
     });
     return mesh.crawlUrl(url, options);
 }

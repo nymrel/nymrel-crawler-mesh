@@ -10,3 +10,4 @@ export * from './sitemap.js';
 export * from './rate-limiter.js';
 export * from './queue.js';
 export * from './mesh.js';
+export * from './network-policy.js';

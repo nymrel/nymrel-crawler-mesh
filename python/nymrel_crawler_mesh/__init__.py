@@ -4,8 +4,7 @@ Zero-Telemetry High-Throughput Web Crawler & Markdown/JSON Extractor for AI Agen
 Copyright (c) 2026 Nymrel / JalenBuilds LLC
 """
 
-import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from .cache import ContentCache
 from .crawler import CrawlerMesh
@@ -27,6 +26,7 @@ from .queue import CrawlQueue
 from .rate_limiter import PoliteRateLimiter
 from .robots import RobotsParser
 from .sitemap import fetch_and_parse_sitemap, parse_sitemap_xml
+from .network_policy import CrawlerSecurityError, NetworkPolicy
 
 __version__ = "1.0.0"
 __author__ = "Nymrel / JalenBuilds LLC <contact@nymrel.com>"
@@ -54,6 +54,8 @@ __all__ = [
     "SitemapResult",
     "CrawlSummary",
     "BenchmarkResult",
+    "CrawlerSecurityError",
+    "NetworkPolicy",
 ]
 
 

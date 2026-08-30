@@ -1,45 +1,44 @@
 # Contributing to nymrel-crawler-mesh
 
-Thank you for your interest in contributing to `nymrel-crawler-mesh`! We welcome community contributions, bug fixes, benchmark improvements, and documentation enhancements.
+Contributions should preserve bounded network behavior, deterministic tests, and honest cross-runtime documentation.
 
-## Development Setup
+## Development setup
 
-### TypeScript / Node.js Engine
-
-```bash
-# Clone the repository
-git clone https://github.com/nymrel/nymrel-crawler-mesh.git
-cd nymrel-crawler-mesh
-
-# Install dependencies
-npm install
-
-# Run build
-npm run build
-
-# Run TypeScript test suite
-npm test
-```
-
-### Python Engine
+Use Node.js 22 or newer and Python 3.11 or newer. The repository defaults are recorded in `.node-version` and `.python-version`.
 
 ```bash
-# Install in editable mode
-pip install -e .
-
-# Run Python unit tests
-python -m unittest discover -s tests -v
+npm ci --ignore-scripts
+npm run check
+npm audit --audit-level=high
+npm pack --dry-run --ignore-scripts
 ```
 
-## Guidelines
+On PowerShell, run the Python suite against the checked-out source:
 
-1. **Dual Engine Parity**: Features added to the TypeScript engine should also be maintained with equivalent semantics in the Python engine whenever possible.
-2. **Zero Telemetry**: Never introduce network dependencies that transmit runtime metadata, analytics, or user telemetry.
-3. **High Performance**: Maintain sub-millisecond AST and HTML extraction wherever possible.
-4. **Testing**: All pull requests must include unit tests verifying 100% green execution across both runtimes.
-5. **Code Style**: Use TypeScript strict mode and standard Python PEP 8 formatting.
+```powershell
+$env:PYTHONPATH = (Resolve-Path '.\python').Path
+python -m unittest discover -s tests -p 'test_*.py' -v
+```
 
-## Code of Conduct
+Optional local correctness tooling should match CI:
 
-All contributors are expected to uphold a respectful, collaborative, and inclusive environment.
-Questions or support: contact `contact@nymrel.com`.
+```bash
+uvx ruff@0.16.5 check python tests
+uvx pip-audit@2.10.1 .
+```
+
+## Change requirements
+
+1. Keep crawler-controlled requests behind the shared outbound policy. Do not introduce direct remote reads in a CLI, sitemap, robots, or helper path.
+2. Add deterministic tests that do not depend on the public internet.
+3. Maintain equivalent safety semantics in TypeScript and Python when both engines expose the affected capability. Document intentional differences.
+4. Do not weaken URL, redirect, body-size, page-count, timeout, robots, or domain boundaries for convenience.
+5. Treat fetched content, error payloads, URLs, and headers as untrusted. Do not echo embedded credentials or secrets.
+6. Keep dependencies minimal, locked where applicable, and justified by a concrete contract.
+7. Update README and security documentation when public behavior changes.
+
+## Pull requests
+
+Keep commits scoped and explain the behavior, risk, and proof. A useful pull request includes the exact commands run and calls out anything that requires registry, environment, or account configuration. Do not claim a deployment or package publication from local build output alone.
+
+Be respectful and collaborative in project discussions. Security reports belong in the private route described in `SECURITY.md`.

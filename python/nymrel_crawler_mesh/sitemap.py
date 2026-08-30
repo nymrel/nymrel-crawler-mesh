@@ -5,11 +5,10 @@ Copyright (c) 2026 Nymrel / JalenBuilds LLC
 """
 
 import re
-import urllib.request
-from typing import List, Optional
-from xml.etree import ElementTree as ET
+from typing import Optional
 
 from .models import SitemapEntry, SitemapResult
+from .network_policy import NetworkPolicy, UrlOpener, fetch_http_text
 
 
 def parse_sitemap_xml(xml_content: str) -> SitemapResult:
@@ -64,37 +63,56 @@ def fetch_and_parse_sitemap(
     timeout_sec: float = 15.0,
     max_depth: int = 2,
     current_depth: int = 0,
+    max_sitemaps: int = 100,
+    max_urls: int = 50_000,
+    policy: Optional[NetworkPolicy] = None,
+    opener: Optional[UrlOpener] = None,
 ) -> SitemapResult:
-    combined_result = SitemapResult()
+    active_policy = policy or NetworkPolicy()
+    visited = set()
+    seen_urls = set()
 
-    try:
-        req = urllib.request.Request(
-            sitemap_url,
-            headers={
-                "User-Agent": user_agent,
-                "Accept": "application/xml, text/xml, */*",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            xml_content = resp.read().decode("utf-8", errors="replace")
+    def walk(url: str, depth: int) -> SitemapResult:
+        result = SitemapResult()
+        if url in visited or len(visited) >= max(1, max_sitemaps):
+            return result
+        visited.add(url)
 
-        parsed = parse_sitemap_xml(xml_content)
-        combined_result.urls.extend(parsed.urls)
-        combined_result.sitemaps.extend(parsed.sitemaps)
+        try:
+            document = fetch_http_text(
+                url,
+                headers={
+                    "User-Agent": user_agent,
+                    "Accept": "application/xml, text/xml, */*",
+                },
+                timeout_sec=timeout_sec,
+                policy=active_policy,
+                opener=opener,
+            )
+            if not 200 <= document.status < 300:
+                result.errors.append(f"Sitemap request failed with HTTP {document.status}")
+                return result
 
-        if parsed.sitemaps and current_depth < max_depth:
-            for child_sitemap in parsed.sitemaps:
-                child_res = fetch_and_parse_sitemap(
-                    child_sitemap,
-                    user_agent=user_agent,
-                    timeout_sec=timeout_sec,
-                    max_depth=max_depth,
-                    current_depth=current_depth + 1,
-                )
-                combined_result.urls.extend(child_res.urls)
-                combined_result.errors.extend(child_res.errors)
+            parsed = parse_sitemap_xml(document.text)
+            for entry in parsed.urls:
+                if len(seen_urls) >= max(1, max_urls):
+                    break
+                if entry.loc in seen_urls:
+                    continue
+                seen_urls.add(entry.loc)
+                result.urls.append(entry)
+            remaining_sitemaps = max(0, max_sitemaps - len(visited))
+            child_sitemaps = parsed.sitemaps[:remaining_sitemaps]
+            result.sitemaps.extend(child_sitemaps)
 
-    except Exception as err:
-        combined_result.errors.append(f"Failed to fetch {sitemap_url}: {str(err)}")
+            if child_sitemaps and depth < max_depth:
+                for child_sitemap in child_sitemaps:
+                    child_result = walk(child_sitemap, depth + 1)
+                    result.urls.extend(child_result.urls)
+                    result.errors.extend(child_result.errors)
+        except Exception as error:
+            result.errors.append(f"Sitemap request failed: {type(error).__name__}")
 
-    return combined_result
+        return result
+
+    return walk(sitemap_url, current_depth)

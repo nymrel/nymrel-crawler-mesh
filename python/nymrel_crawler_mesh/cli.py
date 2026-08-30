@@ -9,12 +9,12 @@ import asyncio
 import json
 import os
 import sys
-import urllib.request
 from typing import List, Optional
 
 from .crawler import CrawlerMesh
 from .extractor import extract_markdown
 from .sitemap import fetch_and_parse_sitemap, parse_sitemap_xml
+from .network_policy import NetworkPolicy, fetch_http_text
 
 VERSION = "1.0.0"
 
@@ -22,7 +22,7 @@ VERSION = "1.0.0"
 def print_banner() -> None:
     print(
         f"\033[1m\033[36mnymrel-crawler-mesh (Python Engine)\033[0m v{VERSION}\n"
-        "Zero-Telemetry High-Throughput Web Crawler & Markdown/JSON Extractor for AI Agents\n"
+        "Bounded, Zero-Telemetry HTTP Crawler & Markdown/JSON Extractor\n"
     )
 
 
@@ -43,6 +43,7 @@ def handle_crawl(args: argparse.Namespace) -> int:
         respect_robots=not args.ignore_robots,
         user_agent=args.user_agent,
         include_sitemaps=args.sitemaps,
+        allow_private_networks=args.allow_private_networks,
     )
 
     def on_page_cb(res):
@@ -87,12 +88,19 @@ def handle_extract(args: argparse.Namespace) -> int:
         raw_html = sys.stdin.read()
     elif target.startswith("http://") or target.startswith("https://"):
         base_url = target
-        req = urllib.request.Request(target, headers={"User-Agent": "NymrelCrawlerMesh/1.0 AI Data Engine"})
         try:
-            with urllib.request.urlopen(req, timeout=15.0) as resp:
-                raw_html = resp.read().decode("utf-8", errors="replace")
+            document = fetch_http_text(
+                target,
+                headers={"User-Agent": "NymrelCrawlerMesh/1.0 AI Data Engine"},
+                policy=NetworkPolicy(allow_private_networks=args.allow_private_networks),
+            )
+            if not 200 <= document.status < 300:
+                print(f"Remote extraction failed: HTTP {document.status}", file=sys.stderr)
+                return 1
+            base_url = document.final_url
+            raw_html = document.text
         except Exception as e:
-            print(f"Error fetching {target}: {e}", file=sys.stderr)
+            print(f"Remote extraction failed: {type(e).__name__}", file=sys.stderr)
             return 1
     else:
         try:
@@ -128,12 +136,15 @@ def handle_extract(args: argparse.Namespace) -> int:
 def handle_sitemap(args: argparse.Namespace) -> int:
     url = args.url
     if url.startswith("http://") or url.startswith("https://"):
-        result = fetch_and_parse_sitemap(url)
+        result = fetch_and_parse_sitemap(
+            url,
+            policy=NetworkPolicy(allow_private_networks=args.allow_private_networks),
+        )
     else:
         with open(url, "r", encoding="utf-8") as f:
             result = parse_sitemap_xml(f.read())
 
-    print(f"\033[1m\033[36m=== Sitemap Parsing Result ===\033[0m")
+    print("\033[1m\033[36m=== Sitemap Parsing Result ===\033[0m")
     print(f"Total URLs found:      {len(result.urls)}")
     print(f"Child Sitemaps found:  {len(result.sitemaps)}")
 
@@ -150,7 +161,7 @@ def handle_sitemap(args: argparse.Namespace) -> int:
     if args.crawl and result.urls:
         urls = [u.loc for u in result.urls]
         print(f"\nLaunching crawler mesh on {len(urls)} sitemap URLs...")
-        mesh = CrawlerMesh()
+        mesh = CrawlerMesh(allow_private_networks=args.allow_private_networks)
         summary = asyncio.run(mesh.crawl(urls))
         print(f"Finished crawling sitemap URLs. Total crawled: {summary.total_crawled}")
 
@@ -163,7 +174,7 @@ def handle_bench(args: argparse.Namespace) -> int:
     print(f"Requests:    {args.requests} total requests")
     print(f"Concurrency: {args.concurrency} parallel workers\n")
 
-    mesh = CrawlerMesh()
+    mesh = CrawlerMesh(allow_private_networks=args.allow_private_networks)
     bench = asyncio.run(mesh.benchmark(args.url, count=args.requests, concurrency=args.concurrency))
 
     print("\033[1m\033[32m=== Benchmark Results ===\033[0m")
@@ -186,7 +197,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="crawler-mesh-py",
-        description="nymrel-crawler-mesh: Zero-Telemetry Web Crawler & Clean Markdown Extractor for AI Agents",
+        description="nymrel-crawler-mesh: bounded, zero-telemetry HTTP crawler and Markdown extractor",
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {VERSION}")
 
@@ -206,6 +217,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     p_crawl.add_argument("--user-agent", default="NymrelCrawlerMesh/1.0", help="User Agent")
     p_crawl.add_argument("--sitemaps", action="store_true", help="Ingest sitemaps")
     p_crawl.add_argument("--silent", action="store_true", help="Suppress logs")
+    p_crawl.add_argument("--allow-private-networks", action="store_true", help="Opt in to loopback/private network targets")
 
     # extract
     p_extract = subparsers.add_parser("extract", help="Extract Markdown/JSON from URL, file, or stdin (-)")
@@ -215,18 +227,21 @@ def main(argv: Optional[List[str]] = None) -> None:
     p_extract.add_argument("--strip-links", action="store_true", help="Remove hyperlinks")
     p_extract.add_argument("--strip-images", action="store_true", help="Remove images")
     p_extract.add_argument("--output", help="Write result to file")
+    p_extract.add_argument("--allow-private-networks", action="store_true", help="Opt in to loopback/private network targets")
 
     # sitemap
     p_sitemap = subparsers.add_parser("sitemap", help="Parse XML sitemap or sitemap index")
     p_sitemap.add_argument("url", help="Sitemap URL or local XML file")
     p_sitemap.add_argument("--crawl", action="store_true", help="Immediately crawl URLs")
     p_sitemap.add_argument("--output", help="Save URLs to JSON file")
+    p_sitemap.add_argument("--allow-private-networks", action="store_true", help="Opt in to loopback/private network targets")
 
     # bench
-    p_bench = subparsers.add_parser("bench", help="Run throughput benchmark")
+    p_bench = subparsers.add_parser("bench", help="Run a bounded request benchmark")
     p_bench.add_argument("url", help="Target URL")
     p_bench.add_argument("--requests", type=int, default=20, help="Total requests")
     p_bench.add_argument("--concurrency", type=int, default=5, help="Concurrency pool")
+    p_bench.add_argument("--allow-private-networks", action="store_true", help="Opt in to loopback/private network targets")
 
     args = parser.parse_args(argv)
 

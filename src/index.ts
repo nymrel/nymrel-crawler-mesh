@@ -39,7 +39,11 @@ export async function crawlUrl(
     respectRobots: options.respectRobots,
     headers: options.headers,
     extractorOptions: options.extractorOptions,
-    fetch: options.fetch
+    fetch: options.fetch,
+    allowPrivateNetworks: options.allowPrivateNetworks,
+    maxResponseBytes: options.maxResponseBytes,
+    maxRedirects: options.maxRedirects,
+    resolveHostname: options.resolveHostname
   });
   return mesh.crawlUrl(url, options);
 }
