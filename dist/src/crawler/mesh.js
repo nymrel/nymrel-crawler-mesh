@@ -36,7 +36,7 @@ export class CrawlerMesh extends EventEmitter {
             includeSitemaps: options.includeSitemaps ?? false,
             extractorOptions: options.extractorOptions || {},
             headers: options.headers || {},
-            fetch: options.fetch || globalThis.fetch,
+            fetch: options.fetch,
             allowPrivateNetworks: options.allowPrivateNetworks ?? false,
             maxResponseBytes: options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
             maxRedirects: options.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
@@ -119,7 +119,7 @@ export class CrawlerMesh extends EventEmitter {
     }
     async crawlUrl(rawUrl, options = {}) {
         const startTime = Date.now();
-        const fetchFn = options.fetch || this.config.fetch || globalThis.fetch;
+        const fetchFn = options.fetch ?? this.config.fetch;
         const timeoutMs = options.timeoutMs ?? this.config.timeoutMs ?? 15000;
         const userAgent = options.userAgent || this.config.userAgent || 'NymrelCrawlerMesh/1.0';
         const respectRobots = options.respectRobots ?? this.config.respectRobots ?? true;

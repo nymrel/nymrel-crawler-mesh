@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { describe, it } from 'node:test';
 import { CrawlerMesh } from '../src/crawler/mesh.js';
 import {
@@ -58,6 +59,58 @@ describe('Outbound crawler policy', () => {
       resolveHostname: publicResolver
     }), 'PRIVATE_NETWORK_TARGET');
     assert.equal(requests, 1, 'the private redirect target must never be requested');
+  });
+
+  it('pins every connection and redirect to the validated address set', async () => {
+    const receivedHosts: string[] = [];
+    const server = createServer((request, response) => {
+      receivedHosts.push(request.headers.host ?? '');
+      if (request.url === '/start') {
+        const address = server.address();
+        assert.ok(address && typeof address === 'object');
+        response.writeHead(302, {
+          location: `http://second.invalid:${address.port}/final`
+        });
+        response.end();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('validated-address-only');
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === 'object');
+      const resolvedHosts: string[] = [];
+      const { response, finalUrl } = await fetchWithPolicy(
+        `http://first.invalid:${address.port}/start`,
+        { headers: { host: 'attacker.invalid' } },
+        {
+          allowPrivateNetworks: true,
+          resolveHostname: async hostname => {
+            resolvedHosts.push(hostname);
+            return ['127.0.0.1'];
+          }
+        }
+      );
+
+      assert.equal(await readResponseText(response), 'validated-address-only');
+      assert.equal(finalUrl, `http://second.invalid:${address.port}/final`);
+      assert.deepEqual(resolvedHosts, ['first.invalid', 'second.invalid']);
+      assert.deepEqual(receivedHosts, [
+        `first.invalid:${address.port}`,
+        `second.invalid:${address.port}`
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(error => error ? reject(error) : resolve());
+      });
+    }
   });
 
   it('caps streamed and declared response bodies', async () => {

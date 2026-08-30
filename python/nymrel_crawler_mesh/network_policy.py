@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
 import urllib.error
@@ -26,6 +27,13 @@ Resolver = Callable[[str], Iterable[str]]
 UrlOpener = Callable[..., object]
 
 
+@dataclass(frozen=True)
+class ResolvedHttpTarget:
+    url: str
+    hostname: str
+    addresses: tuple[str, ...]
+
+
 def _default_resolver(hostname: str) -> Iterable[str]:
     try:
         return [str(ipaddress.ip_address(hostname))]
@@ -46,8 +54,12 @@ class NetworkPolicy:
             raise ValueError("Network limits must be positive integers")
 
     def validate_url(self, raw_url: str) -> str:
+        return self.resolve_target(raw_url).url
+
+    def resolve_target(self, raw_url: str) -> ResolvedHttpTarget:
         try:
             parsed = urlparse(raw_url)
+            parsed.port
         except (TypeError, ValueError) as error:
             raise CrawlerSecurityError("INVALID_URL") from error
 
@@ -55,27 +67,36 @@ class NetworkPolicy:
             raise CrawlerSecurityError("INVALID_URL")
         if parsed.username is not None or parsed.password is not None:
             raise CrawlerSecurityError("UNSAFE_URL_CREDENTIALS")
-        if self.allow_private_networks:
-            return parsed.geturl()
 
         try:
             try:
-                addresses = [str(ipaddress.ip_address(parsed.hostname))]
+                raw_addresses = [str(ipaddress.ip_address(parsed.hostname))]
             except ValueError:
-                addresses = list(self.resolver(parsed.hostname))
+                raw_addresses = list(self.resolver(parsed.hostname))
         except Exception as error:
             raise CrawlerSecurityError("DNS_RESOLUTION_FAILED") from error
 
+        addresses = []
+        seen = set()
+        try:
+            for raw_address in raw_addresses:
+                address = str(ipaddress.ip_address(raw_address))
+                if address not in seen:
+                    addresses.append(address)
+                    seen.add(address)
+        except ValueError as error:
+            raise CrawlerSecurityError("DNS_RESOLUTION_FAILED") from error
+
         if not addresses:
+            raise CrawlerSecurityError("DNS_RESOLUTION_FAILED")
+        if not self.allow_private_networks and any(not ipaddress.ip_address(address).is_global for address in addresses):
             raise CrawlerSecurityError("PRIVATE_NETWORK_TARGET")
 
-        try:
-            if any(not ipaddress.ip_address(address).is_global for address in addresses):
-                raise CrawlerSecurityError("PRIVATE_NETWORK_TARGET")
-        except ValueError as error:
-            raise CrawlerSecurityError("PRIVATE_NETWORK_TARGET") from error
-
-        return parsed.geturl()
+        return ResolvedHttpTarget(
+            url=parsed.geturl(),
+            hostname=parsed.hostname,
+            addresses=tuple(addresses),
+        )
 
 
 @dataclass(frozen=True)
@@ -87,13 +108,90 @@ class HttpDocument:
     text: str
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
-        return None
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, port: int, pinned_address: str, timeout: float):
+        super().__init__(host, port=port, timeout=timeout)
+        self._pinned_address = pinned_address
+        self._create_connection = self._create_pinned_connection
+
+    def _create_pinned_connection(self, address, timeout, source_address):  # type: ignore[no-untyped-def]
+        return socket.create_connection(
+            (self._pinned_address, address[1]),
+            timeout=timeout,
+            source_address=source_address,
+        )
 
 
-def _default_open(request: urllib.request.Request, timeout: float):
-    return urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, port: int, pinned_address: str, timeout: float):
+        super().__init__(host, port=port, timeout=timeout)
+        self._pinned_address = pinned_address
+        self._create_connection = self._create_pinned_connection
+
+    def _create_pinned_connection(self, address, timeout, source_address):  # type: ignore[no-untyped-def]
+        return socket.create_connection(
+            (self._pinned_address, address[1]),
+            timeout=timeout,
+            source_address=source_address,
+        )
+
+
+class _PinnedResponse:
+    def __init__(self, response: http.client.HTTPResponse, connection: http.client.HTTPConnection):
+        self._response = response
+        self._connection = connection
+        self.status = response.status
+        self.code = response.status
+        self.reason = response.reason
+        self.headers = response.headers
+
+    def read(self, size: int = -1) -> bytes:
+        return self._response.read(size)
+
+    def close(self) -> None:
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
+
+
+def _request_path(raw_url: str) -> str:
+    parsed = urlparse(raw_url)
+    path = parsed.path or "/"
+    if parsed.params:
+        path = f"{path};{parsed.params}"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    return path
+
+
+def _default_open(
+    request: urllib.request.Request,
+    target: ResolvedHttpTarget,
+    timeout: float,
+):
+    parsed = urlparse(target.url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    connection_type = _PinnedHTTPSConnection if parsed.scheme == "https" else _PinnedHTTPConnection
+    last_error: Optional[Exception] = None
+
+    for address in target.addresses:
+        connection = connection_type(target.hostname, port, address, timeout)
+        try:
+            connection.request(
+                request.get_method(),
+                _request_path(target.url),
+                body=request.data,
+                headers=dict(request.header_items()),
+            )
+            return _PinnedResponse(connection.getresponse(), connection)
+        except Exception as error:
+            connection.close()
+            last_error = error
+
+    if last_error is not None:
+        raise last_error
+    raise CrawlerSecurityError("DNS_RESOLUTION_FAILED")
 
 
 def _header_map(response: object) -> Dict[str, str]:
@@ -132,6 +230,16 @@ def _without_sensitive_headers(headers: Mapping[str, str]) -> Dict[str, str]:
     return {key: value for key, value in headers.items() if key.lower() not in sensitive}
 
 
+def _without_host_header(headers: Mapping[str, str]) -> Dict[str, str]:
+    return {key: value for key, value in headers.items() if key.lower() != "host"}
+
+
+def _origin(raw_url: str) -> tuple[str, str, int]:
+    parsed = urlparse(raw_url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return parsed.scheme, parsed.hostname or "", port
+
+
 def fetch_http_text(
     raw_url: str,
     *,
@@ -143,15 +251,17 @@ def fetch_http_text(
     """Fetch one bounded text document, validating every redirect destination."""
 
     active_policy = policy or NetworkPolicy()
-    current_url = active_policy.validate_url(raw_url)
-    request_headers = dict(headers or {})
+    current_target = active_policy.resolve_target(raw_url)
+    current_url = current_target.url
+    # The validated URL, not caller input, owns HTTP authority routing.
+    request_headers = _without_host_header(headers or {})
 
     for redirect_count in range(active_policy.max_redirects + 1):
         request = urllib.request.Request(current_url, headers=request_headers)
         response: object
         try:
             if opener is None:
-                response = _default_open(request, timeout_sec)
+                response = _default_open(request, current_target, timeout_sec)
             else:
                 response = opener(request, timeout=timeout_sec)
         except urllib.error.HTTPError as error:
@@ -170,8 +280,9 @@ def fetch_http_text(
             if redirect_count >= active_policy.max_redirects:
                 raise CrawlerSecurityError("TOO_MANY_REDIRECTS")
 
-            next_url = active_policy.validate_url(urljoin(current_url, location))
-            if urlparse(next_url).netloc != urlparse(current_url).netloc:
+            current_target = active_policy.resolve_target(urljoin(current_url, location))
+            next_url = current_target.url
+            if _origin(next_url) != _origin(current_url):
                 request_headers = _without_sensitive_headers(request_headers)
             current_url = next_url
             continue

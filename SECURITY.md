@@ -12,12 +12,12 @@ Include the affected commit or version, runtime, reproduction steps, expected im
 
 ## Security boundary
 
-The crawler rejects non-HTTP(S) URLs, URL credentials, non-global address targets, unsafe redirect destinations, oversized bodies, and excessive redirects by default. Private-network access requires explicit configuration.
+The crawler rejects non-HTTP(S) URLs, URL credentials, non-global address targets, unsafe redirect destinations, oversized bodies, and excessive redirects by default. Private-network access requires explicit configuration. For the built-in Node and Python transports, every request and redirect connects only to its validated address set while the original hostname remains authoritative for HTTP `Host` and TLS verification.
 
 Those controls reduce common server-side request forgery paths, but they do not create a complete sandbox:
 
-- DNS can change after preflight validation and before a connection is established.
-- A custom resolver, fetch function, or URL opener is trusted policy infrastructure.
+- A custom resolver, fetch function, or URL opener is trusted policy infrastructure; custom fetch/openers replace the built-in address-pinned transport.
+- Host egress rules, proxies, and runtime-level DNS/network hooks remain outside the library's authority.
 - A permissive outbound proxy can change the effective destination.
 - Extracted remote content remains untrusted data.
 - Parser work can still consume CPU and memory within the configured body limit.

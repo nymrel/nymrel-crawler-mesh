@@ -16,6 +16,11 @@ BLOCK_SEC = 0.3   # controlled blocking delay inside fake network handlers
 TICK_SEC = 0.005  # event-loop heartbeat interval
 MIN_TICKS = 20    # ~0.1s of liveness; a loop-blocking implementation yields ~0-2
 
+
+def private_test_resolver(_host):
+    return ["127.0.0.1"]
+
+
 ROBOTS_ALLOW_ALL = "User-agent: *\nAllow: /\n"
 SITEMAP_XML = (
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
@@ -106,7 +111,14 @@ class TestCrawlerAsyncIO(unittest.IsolatedAsyncioTestCase):
         net = _FakeNet()
         net.add("/robots.txt", delay=BLOCK_SEC, body=ROBOTS_ALLOW_ALL, content_type="text/plain")
         net.add("/page-a", body="<html><body>hi</body></html>")
-        crawler = CrawlerMesh(cache=False, respect_robots=True, delay_ms=0, allow_private_networks=True, url_opener=net)
+        crawler = CrawlerMesh(
+            cache=False,
+            respect_robots=True,
+            delay_ms=0,
+            allow_private_networks=True,
+            resolver=private_test_resolver,
+            url_opener=net,
+        )
 
         with mock.patch("urllib.request.urlopen", net):
             result, ticks = await _run_with_heartbeat(
@@ -131,7 +143,15 @@ class TestCrawlerAsyncIO(unittest.IsolatedAsyncioTestCase):
         net.add("/home", body="<html><body>home</body></html>")
         net.add("/s1", body="<html><body>s1</body></html>")
         net.add("/s2", body="<html><body>s2</body></html>")
-        crawler = CrawlerMesh(cache=False, include_sitemaps=True, max_pages=3, delay_ms=0, allow_private_networks=True, url_opener=net)
+        crawler = CrawlerMesh(
+            cache=False,
+            include_sitemaps=True,
+            max_pages=3,
+            delay_ms=0,
+            allow_private_networks=True,
+            resolver=private_test_resolver,
+            url_opener=net,
+        )
 
         with mock.patch("urllib.request.urlopen", net):
             summary, ticks = await _run_with_heartbeat(
@@ -153,7 +173,15 @@ class TestCrawlerAsyncIO(unittest.IsolatedAsyncioTestCase):
             net.add(f"https://{host}/robots.txt", delay=BLOCK_SEC, body=ROBOTS_ALLOW_ALL, content_type="text/plain")
             net.add(f"https://{host}/sitemap.xml", delay=BLOCK_SEC, body=empty_sitemap, content_type="application/xml")
             net.add(f"https://{host}/home", body="<html><body>x</body></html>")
-        crawler = CrawlerMesh(cache=False, include_sitemaps=True, max_pages=2, delay_ms=0, allow_private_networks=True, url_opener=net)
+        crawler = CrawlerMesh(
+            cache=False,
+            include_sitemaps=True,
+            max_pages=2,
+            delay_ms=0,
+            allow_private_networks=True,
+            resolver=private_test_resolver,
+            url_opener=net,
+        )
 
         start = time.perf_counter()
         with mock.patch("urllib.request.urlopen", net):
@@ -182,7 +210,13 @@ class TestCrawlerAsyncIO(unittest.IsolatedAsyncioTestCase):
             content_type="text/plain",
         )
         net.add("/public-page", body="<html><body>ok</body></html>")
-        crawler = CrawlerMesh(cache=False, delay_ms=0, allow_private_networks=True, url_opener=net)
+        crawler = CrawlerMesh(
+            cache=False,
+            delay_ms=0,
+            allow_private_networks=True,
+            resolver=private_test_resolver,
+            url_opener=net,
+        )
 
         with mock.patch("urllib.request.urlopen", net):
             with self.assertRaises(PermissionError):
@@ -203,7 +237,13 @@ class TestCrawlerAsyncIO(unittest.IsolatedAsyncioTestCase):
         net.add("/robots.txt", body=ROBOTS_ALLOW_ALL, content_type="text/plain")
         net.add("/page-b", body="<html><body>b</body></html>")
         net.fail_suffixes.add("/robots.txt")
-        crawler = CrawlerMesh(cache=False, delay_ms=0, allow_private_networks=True, url_opener=net)
+        crawler = CrawlerMesh(
+            cache=False,
+            delay_ms=0,
+            allow_private_networks=True,
+            resolver=private_test_resolver,
+            url_opener=net,
+        )
 
         with mock.patch("urllib.request.urlopen", net):
             result = await crawler.crawl_url("https://soft.test/page-b")
@@ -217,7 +257,15 @@ class TestCrawlerAsyncIO(unittest.IsolatedAsyncioTestCase):
         net2 = _FakeNet()
         net2.add("/robots.txt", body=ROBOTS_ALLOW_ALL, content_type="text/plain")
         net2.add("/home", body="<html><body>home</body></html>")
-        crawler2 = CrawlerMesh(cache=False, include_sitemaps=True, max_pages=1, delay_ms=0, allow_private_networks=True, url_opener=net2)
+        crawler2 = CrawlerMesh(
+            cache=False,
+            include_sitemaps=True,
+            max_pages=1,
+            delay_ms=0,
+            allow_private_networks=True,
+            resolver=private_test_resolver,
+            url_opener=net2,
+        )
 
         with mock.patch("nymrel_crawler_mesh.crawler.fetch_and_parse_sitemap", boom):
             with mock.patch("urllib.request.urlopen", net2):

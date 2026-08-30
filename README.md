@@ -8,7 +8,7 @@ This repository is currently the distribution source of truth. As of 2026-08-29,
 
 Supported source runtimes:
 
-- Node.js 22, 24, and 26; the local default is Node.js 24.
+- Node.js 22.19 or newer, including current 22, 24, and 26 lines; the local default is Node.js 24.
 - Python 3.11, 3.12, 3.13, and 3.14; the local default is Python 3.13.
 - TypeScript 7 for builds and type checking.
 
@@ -30,6 +30,7 @@ All crawler-controlled remote reads—including page, `robots.txt`, sitemap, CLI
 - only `http:` and `https:` URLs are accepted;
 - credentials embedded in URLs are rejected;
 - every resolved address and redirect destination must be globally reachable by default;
+- the built-in transports connect only to the validated address set while preserving the original hostname for HTTP `Host` and TLS verification;
 - response bodies are limited to 10 MiB by default;
 - redirect traversal is limited to five hops by default;
 - sensitive request headers are removed on cross-origin redirects.
@@ -49,7 +50,7 @@ crawler-mesh crawl http://127.0.0.1:8080 --allow-private-networks
 crawler-mesh-py crawl http://127.0.0.1:8080 --allow-private-networks
 ```
 
-This URL and DNS preflight is a guardrail, not a network sandbox. DNS can change between validation and connection, and a custom resolver or fetch implementation becomes part of the caller's trust boundary. For hostile or multi-tenant inputs, also enforce outbound firewall/proxy policy, run with least privilege, isolate cache/output directories, and deny metadata-service and control-plane routes at the network layer.
+The built-in Node and Python transports close the DNS validation/connection gap by pinning each request and redirect to its validated address set. A caller-supplied resolver, fetch implementation, or URL opener is an explicit trusted-policy override and becomes part of the caller's security boundary. This library guardrail is not a network sandbox: for hostile or multi-tenant inputs, also enforce outbound firewall/proxy policy, run with least privilege, isolate cache/output directories, and deny metadata-service and control-plane routes at the network layer.
 
 Respect site terms, access controls, privacy requirements, and crawling policy. `robots.txt` handling is useful coordination behavior; it is not authorization.
 
@@ -110,7 +111,7 @@ const local = extractMarkdown('<main><h1>Hello</h1></main>');
 console.log(local.markdown);
 ```
 
-`resolveHostname` and `fetch` can be supplied for deterministic tests or controlled runtimes. Treat both as trusted policy dependencies.
+`resolveHostname` and `fetch` can be supplied for deterministic tests or controlled runtimes. The default transport pins validated addresses; a custom `fetch` replaces that transport and is therefore a trusted policy dependency.
 
 ## Python API
 
@@ -143,7 +144,7 @@ local = extract_markdown('<main><h1>Hello</h1></main>')
 print(local.markdown)
 ```
 
-The Python engine keeps synchronous network, cache, and extraction work off the event loop. A caller-provided resolver or URL opener is trusted infrastructure and should be deterministic in tests.
+The Python engine keeps synchronous network, cache, and extraction work off the event loop. Its default transport connects to a validated IP while retaining the original hostname for `Host` and TLS certificate verification. A caller-provided resolver or URL opener replaces part of that boundary, is trusted infrastructure, and should be deterministic in tests.
 
 ## CLI
 

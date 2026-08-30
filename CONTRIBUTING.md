@@ -4,7 +4,7 @@ Contributions should preserve bounded network behavior, deterministic tests, and
 
 ## Development setup
 
-Use Node.js 22 or newer and Python 3.11 or newer. The repository defaults are recorded in `.node-version` and `.python-version`.
+Use Node.js 22.19 or newer and Python 3.11 or newer. The repository defaults are recorded in `.node-version` and `.python-version`.
 
 ```bash
 npm ci --ignore-scripts
@@ -34,8 +34,9 @@ uvx pip-audit@2.10.1 .
 3. Maintain equivalent safety semantics in TypeScript and Python when both engines expose the affected capability. Document intentional differences.
 4. Do not weaken URL, redirect, body-size, page-count, timeout, robots, or domain boundaries for convenience.
 5. Treat fetched content, error payloads, URLs, and headers as untrusted. Do not echo embedded credentials or secrets.
-6. Keep dependencies minimal, locked where applicable, and justified by a concrete contract.
-7. Update README and security documentation when public behavior changes.
+6. Preserve the resolved-address connection pin: the transport may retain the original hostname for `Host` and TLS verification, but it must not perform an unvalidated second hostname resolution.
+7. Keep dependencies minimal, locked where applicable, and justified by a concrete contract.
+8. Update README and security documentation when public behavior changes.
 
 ## Pull requests
 

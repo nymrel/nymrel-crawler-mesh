@@ -4,7 +4,8 @@
  */
 
 import { lookup } from 'node:dns/promises';
-import { BlockList, isIP } from 'node:net';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { Client, fetch as undiciFetch } from 'undici';
 
 export type CrawlerSecurityErrorCode =
   | 'INVALID_URL'
@@ -45,10 +46,26 @@ export interface SafeFetchResult {
   finalUrl: string;
 }
 
+interface ResolvedAddress {
+  address: string;
+  family: 4 | 6;
+}
+
+interface ResolvedHttpTarget {
+  url: URL;
+  hostname: string;
+  addresses: ResolvedAddress[];
+}
+
 export const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_MAX_REDIRECTS = 5;
 
 const NON_GLOBAL = new BlockList();
+const GLOBAL_IPV6 = new BlockList();
+
+// The IANA global-unicast allocation is 2000::/3. Special-purpose ranges
+// inside it are denied separately below. Everything outside it fails closed.
+GLOBAL_IPV6.addSubnet('2000::', 3, 'ipv6');
 
 for (const [address, prefix] of [
   ['0.0.0.0', 8],
@@ -95,7 +112,9 @@ function hostnameWithoutBrackets(hostname: string): string {
 function isNonGlobalAddress(address: string): boolean {
   const family = isIP(address);
   if (family === 4) return NON_GLOBAL.check(address, 'ipv4');
-  if (family === 6) return NON_GLOBAL.check(address, 'ipv6');
+  if (family === 6) {
+    return !GLOBAL_IPV6.check(address, 'ipv6') || NON_GLOBAL.check(address, 'ipv6');
+  }
   return true;
 }
 
@@ -119,6 +138,13 @@ export async function assertSafeHttpUrl(
   input: string | URL,
   options: NetworkPolicyOptions = {}
 ): Promise<URL> {
+  return (await resolveHttpTarget(input, options)).url;
+}
+
+async function resolveHttpTarget(
+  input: string | URL,
+  options: NetworkPolicyOptions = {}
+): Promise<ResolvedHttpTarget> {
   let url: URL;
   try {
     url = input instanceof URL ? new URL(input) : new URL(input);
@@ -134,8 +160,6 @@ export async function assertSafeHttpUrl(
     throw new CrawlerSecurityError('UNSAFE_URL_CREDENTIALS');
   }
 
-  if (options.allowPrivateNetworks) return url;
-
   const hostname = hostnameWithoutBrackets(url.hostname);
   let addresses: string[];
   try {
@@ -146,11 +170,27 @@ export async function assertSafeHttpUrl(
     throw new CrawlerSecurityError('DNS_RESOLUTION_FAILED');
   }
 
-  if (addresses.length === 0 || addresses.some(isNonGlobalAddress)) {
+  const resolvedAddresses: ResolvedAddress[] = [];
+  const seen = new Set<string>();
+  for (const address of addresses) {
+    const family = isIP(address);
+    if (family !== 4 && family !== 6) {
+      throw new CrawlerSecurityError('DNS_RESOLUTION_FAILED');
+    }
+    if (seen.has(address)) continue;
+    seen.add(address);
+    resolvedAddresses.push({ address, family });
+  }
+
+  if (resolvedAddresses.length === 0) {
+    throw new CrawlerSecurityError('DNS_RESOLUTION_FAILED');
+  }
+
+  if (!options.allowPrivateNetworks && resolvedAddresses.some(({ address }) => isNonGlobalAddress(address))) {
     throw new CrawlerSecurityError('PRIVATE_NETWORK_TARGET');
   }
 
-  return url;
+  return { url, hostname, addresses: resolvedAddresses };
 }
 
 function isRedirect(status: number): boolean {
@@ -164,18 +204,83 @@ function stripSensitiveHeadersOnCrossOrigin(headers: Headers, from: URL, to: URL
   headers.delete('proxy-authorization');
 }
 
+function pinnedLookup(target: ResolvedHttpTarget): LookupFunction {
+  return (hostname, lookupOptions, callback): void => {
+    if (hostnameWithoutBrackets(hostname).toLowerCase() !== target.hostname.toLowerCase()) {
+      const error = new Error('Pinned resolver hostname mismatch') as NodeJS.ErrnoException;
+      error.code = 'ENOTFOUND';
+      callback(error, '', 0);
+      return;
+    }
+
+    const requestedFamily = lookupOptions.family === 4 || lookupOptions.family === 6
+      ? lookupOptions.family
+      : 0;
+    const candidates = requestedFamily === 0
+      ? target.addresses
+      : target.addresses.filter(({ family }) => family === requestedFamily);
+
+    if (candidates.length === 0) {
+      const error = new Error('No validated address for requested family') as NodeJS.ErrnoException;
+      error.code = 'ENOTFOUND';
+      callback(error, '', requestedFamily);
+      return;
+    }
+
+    if (lookupOptions.all) {
+      callback(null, candidates.map(({ address, family }) => ({ address, family })));
+      return;
+    }
+
+    callback(null, candidates[0]!.address, candidates[0]!.family);
+  };
+}
+
+async function fetchPinned(
+  target: ResolvedHttpTarget,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const client = new Client(target.url.origin, {
+    connect: { lookup: pinnedLookup(target) },
+    connectTimeout: timeoutMs,
+    headersTimeout: timeoutMs,
+    bodyTimeout: timeoutMs,
+    pipelining: 0,
+    maxCachedSessions: 0,
+    autoSelectFamily: target.addresses.length > 1
+  });
+
+  try {
+    const response = await undiciFetch(target.url, {
+      ...init,
+      dispatcher: client
+    } as unknown as Parameters<typeof undiciFetch>[1]);
+
+    // Graceful close waits for the response body to be consumed or cancelled,
+    // so the validated address set is scoped to exactly this request.
+    void client.close().catch(() => undefined);
+    return response as unknown as Response;
+  } catch (error) {
+    await client.destroy(error instanceof Error ? error : null);
+    throw error;
+  }
+}
+
 export async function fetchWithPolicy(
   input: string | URL,
   init: RequestInit = {},
   options: SafeFetchOptions = {}
 ): Promise<SafeFetchResult> {
-  const fetchFn = options.fetch ?? globalThis.fetch;
   const maxRedirects = normalizedPositiveInteger(options.maxRedirects, DEFAULT_MAX_REDIRECTS);
   const timeoutMs = normalizedPositiveInteger(options.timeoutMs, 15_000);
-  let currentUrl = await assertSafeHttpUrl(input, options);
+  let currentTarget = await resolveHttpTarget(input, options);
+  let currentUrl = currentTarget.url;
   let method = init.method ?? 'GET';
   let body = init.body;
   const headers = new Headers(init.headers);
+  // The validated URL, not caller input, owns HTTP authority routing.
+  headers.delete('host');
 
   for (let redirects = 0; ; redirects += 1) {
     const controller = new AbortController();
@@ -186,14 +291,17 @@ export async function fetchWithPolicy(
 
     let response: Response;
     try {
-      response = await fetchFn(currentUrl, {
+      const requestInit: RequestInit = {
         ...init,
         method,
         body,
         headers,
         redirect: 'manual',
         signal
-      });
+      };
+      response = options.fetch
+        ? await options.fetch(currentUrl, requestInit)
+        : await fetchPinned(currentTarget, requestInit, timeoutMs);
     } finally {
       clearTimeout(timeout);
     }
@@ -212,7 +320,8 @@ export async function fetchWithPolicy(
     let nextUrl: URL;
     try {
       nextUrl = new URL(location, currentUrl);
-      nextUrl = await assertSafeHttpUrl(nextUrl, options);
+      currentTarget = await resolveHttpTarget(nextUrl, options);
+      nextUrl = currentTarget.url;
     } catch (error) {
       if (error instanceof CrawlerSecurityError) throw error;
       throw new CrawlerSecurityError('INVALID_URL');
