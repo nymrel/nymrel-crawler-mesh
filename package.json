@@ -32,7 +32,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "crawler-mesh": "bin/crawler-mesh.js"
+    "crawler-mesh": "bin/crawler-mesh.js",
+    "radar-heal": "dist/src/radar-heal/cli.js"
   },
   "files": [
     "dist/src",
@@ -48,7 +49,8 @@
     "test:unit": "node --test dist/test/*.test.js",
     "check": "npm run typecheck && npm test",
     "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist', {recursive:true, force:true});\"",
-    "prepack": "npm run check"
+    "prepack": "npm run check",
+    "radar-heal": "node dist/src/radar-heal/cli.js"
   },
   "devDependencies": {
     "@types/node": "26.2.0",
