@@ -1,0 +1,12 @@
+{
+  "schema": "nymrel.radar-heal.contract.v1",
+  "name": "public release feed",
+  "minRecords": 2,
+  "fields": [
+    { "path": "title", "required": true, "type": "string" },
+    { "path": "url", "required": true, "type": "string" },
+    { "path": "publishedAt", "required": true, "type": "string" },
+    { "path": "summary", "required": true, "type": "string" },
+    { "path": "tags", "type": "array" }
+  ]
+}
