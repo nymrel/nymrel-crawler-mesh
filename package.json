@@ -53,7 +53,7 @@
     "radar-heal": "node dist/src/radar-heal/cli.js"
   },
   "devDependencies": {
-    "@types/node": "26.2.0",
+    "@types/node": "26.4.1",
     "typescript": "7.0.2"
   },
   "dependencies": {
