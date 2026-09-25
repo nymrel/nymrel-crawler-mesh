@@ -27,11 +27,78 @@ def decode_html(text: str) -> str:
     return html.unescape(text)
 
 
+SAFE_LINK_SCHEMES = {"http", "https", "mailto", "tel"}
+SAFE_IMAGE_SCHEMES = {"http", "https"}
+
+
+def _strip_html_comments(value: str) -> str:
+    output = []
+    cursor = 0
+    while cursor < len(value):
+        start = value.find("<!--", cursor)
+        if start < 0:
+            output.append(value[cursor:])
+            break
+        output.append(value[cursor:start])
+        end = value.find("-->", start + 4)
+        if end < 0:
+            break
+        cursor = end + 3
+    return "".join(output)
+
+
+def _resolve_safe_reference(
+    value: str,
+    base_url: Optional[str],
+    allowed_schemes: set[str],
+    *,
+    allow_fragment: bool = False,
+) -> str:
+    raw = value.strip()
+    if not raw:
+        return ""
+    if allow_fragment and raw.startswith("#"):
+        return raw
+
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.scheme.lower() not in allowed_schemes:
+        return ""
+
+    candidate = urljoin(base_url, raw) if base_url else raw
+    parsed_candidate = urlparse(candidate)
+    if parsed_candidate.scheme and parsed_candidate.scheme.lower() not in allowed_schemes:
+        return ""
+    return candidate
+
+
+def _escape_markdown_destination(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+        .replace("\r", "")
+        .replace("\n", "")
+    )
+
+
+def _escape_markdown_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _escape_yaml_double_quoted(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
+
+
 def clean_html(raw_html: str, target_main_content: bool = True) -> str:
     cleaned = raw_html
 
-    # 1. Remove comments
-    cleaned = re.sub(r"<!--[\s\S]*?-->", "", cleaned)
+    # 1. Remove comments with a bounded scanner rather than a backtracking regex.
+    cleaned = _strip_html_comments(cleaned)
 
     # 2. Remove script, style, noscript, svg, iframe, canvas, audio, video, template, head
     tags_to_remove = [
@@ -175,13 +242,15 @@ def extract_links_and_images(
         rel_match = re.search(r'\brel=["\']([^"\']+)["\']', attrs, flags=re.IGNORECASE)
 
         if href_match:
-            href = href_match.group(1).strip()
-            if not href.startswith("javascript:") and not href.startswith("#"):
-                if base_url:
-                    href = urljoin(base_url, href)
-
+            href = _resolve_safe_reference(
+                href_match.group(1),
+                base_url,
+                SAFE_LINK_SCHEMES,
+                allow_fragment=False,
+            )
+            if href:
                 is_internal = False
-                if base_hostname and href:
+                if base_hostname:
                     is_internal = urlparse(href).hostname == base_hostname
 
                 links.append(
@@ -202,11 +271,12 @@ def extract_links_and_images(
         title_match = re.search(r'\btitle=["\']([^"\']*)["\']', attrs, flags=re.IGNORECASE)
 
         if src_match:
-            src = src_match.group(1).strip()
-            if not src.startswith("data:"):
-                if base_url:
-                    src = urljoin(base_url, src)
-
+            src = _resolve_safe_reference(
+                src_match.group(1),
+                base_url,
+                SAFE_IMAGE_SCHEMES,
+            )
+            if src:
                 images.append(
                     DiscoveredImage(
                         src=src,
@@ -331,13 +401,16 @@ def html_to_markdown(html_content: str, base_url: Optional[str] = None) -> Tuple
         h_match = re.search(r'\bhref=["\']([^"\']+)["\']', attrs, re.I)
         if not h_match:
             return inner
-        href = h_match.group(1).strip()
-        if href.startswith("javascript:"):
+        href = _resolve_safe_reference(
+            h_match.group(1),
+            base_url,
+            SAFE_LINK_SCHEMES,
+            allow_fragment=True,
+        )
+        if not href:
             return inner
-        if base_url:
-            href = urljoin(base_url, href)
         clean_inner = re.sub(r"<[^>]+>", "", inner).strip() or href
-        return f"[{clean_inner}]({href})"
+        return f"[{clean_inner}]({_escape_markdown_destination(href)})"
 
     text = re.sub(r"<a\b([^>]*)>([\s\S]*?)</a>", replace_link, text, flags=re.IGNORECASE)
 
@@ -348,11 +421,15 @@ def html_to_markdown(html_content: str, base_url: Optional[str] = None) -> Tuple
         a_match = re.search(r'\balt=["\']([^"\']*)["\']', attrs, re.I)
         if not s_match:
             return ""
-        src = s_match.group(1).strip()
-        if base_url:
-            src = urljoin(base_url, src)
+        src = _resolve_safe_reference(
+            s_match.group(1),
+            base_url,
+            SAFE_IMAGE_SCHEMES,
+        )
+        if not src:
+            return ""
         alt = decode_html(a_match.group(1)) if a_match else ""
-        return f"![{alt}]({src})"
+        return f"![{_escape_markdown_label(alt)}]({_escape_markdown_destination(src)})"
 
     text = re.sub(r"<img\b([^>]+)\/?>", replace_img, text, flags=re.IGNORECASE)
 
@@ -415,20 +492,17 @@ def extract_markdown(
     if include_frontmatter:
         fm = ["---"]
         if metadata.title:
-            escaped_title = metadata.title.replace('"', '\\"')
-            fm.append(f'title: "{escaped_title}"')
+            fm.append(f'title: "{_escape_yaml_double_quoted(metadata.title)}"')
         if metadata.description:
-            escaped_desc = metadata.description.replace('"', '\\"')
-            fm.append(f'description: "{escaped_desc}"')
+            fm.append(f'description: "{_escape_yaml_double_quoted(metadata.description)}"')
         if metadata.canonical:
-            fm.append(f'canonical: "{metadata.canonical}"')
+            fm.append(f'canonical: "{_escape_yaml_double_quoted(metadata.canonical)}"')
         if metadata.author:
-            escaped_author = metadata.author.replace('"', '\\"')
-            fm.append(f'author: "{escaped_author}"')
+            fm.append(f'author: "{_escape_yaml_double_quoted(metadata.author)}"')
         if metadata.published_time:
-            fm.append(f'published: "{metadata.published_time}"')
+            fm.append(f'published: "{_escape_yaml_double_quoted(metadata.published_time)}"')
         if metadata.language:
-            fm.append(f'language: "{metadata.language}"')
+            fm.append(f'language: "{_escape_yaml_double_quoted(metadata.language)}"')
         fm.append(f"words: {word_count}")
         fm.append(f"tokens: {estimated_tokens}")
         fm.append(f'extractedAt: "{datetime.now(timezone.utc).isoformat()}"')
