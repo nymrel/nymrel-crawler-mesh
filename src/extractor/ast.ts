@@ -31,39 +31,116 @@ export function parseAttributes(attrString: string): Record<string, string> {
 
 export function tokenizeHtml(html: string): HtmlToken[] {
   const tokens: HtmlToken[] = [];
-  const tagRegex = /<(!?[\w:-]+)([^>]*)>|<\/([\w:-]+)>|<!--[\s\S]*?-->|([^<]+)/gi;
-  let match: RegExpExecArray | null;
+  let cursor = 0;
 
-  while ((match = tagRegex.exec(html)) !== null) {
-    const [raw, openTagName, attrString, closeTagName, textContent] = match;
-
-    if (raw.startsWith('<!--')) {
-      tokens.push({ type: 'comment', raw });
-    } else if (closeTagName) {
-      tokens.push({
-        type: 'closeTag',
-        tagName: closeTagName.toLowerCase()
-      });
-    } else if (openTagName) {
-      const tagName = openTagName.toLowerCase();
-      const isSelfClosing = raw.endsWith('/>') || ['img', 'br', 'hr', 'input', 'meta', 'link'].includes(tagName);
-      const attributes = parseAttributes(attrString || '');
-
-      tokens.push({
-        type: isSelfClosing ? 'selfClosingTag' : 'openTag',
-        tagName,
-        attributes,
-        raw
-      });
-    } else if (textContent) {
-      tokens.push({
-        type: 'text',
-        text: textContent
-      });
+  while (cursor < html.length) {
+    if (html.startsWith('<!--', cursor)) {
+      const end = html.indexOf('-->', cursor + 4);
+      const stop = end === -1 ? html.length : end + 3;
+      tokens.push({ type: 'comment', raw: html.slice(cursor, stop) });
+      cursor = stop;
+      continue;
     }
+
+    if (html[cursor] !== '<') {
+      const next = html.indexOf('<', cursor);
+      const stop = next === -1 ? html.length : next;
+      tokens.push({ type: 'text', text: html.slice(cursor, stop) });
+      cursor = stop;
+      continue;
+    }
+
+    const end = html.indexOf('>', cursor + 1);
+    if (end === -1) {
+      tokens.push({ type: 'text', text: html.slice(cursor) });
+      break;
+    }
+
+    const raw = html.slice(cursor, end + 1);
+    const inner = raw.slice(1, -1).trim();
+    cursor = end + 1;
+
+    if (!inner || inner.startsWith('!') || inner.startsWith('?')) {
+      continue;
+    }
+
+    if (inner.startsWith('/')) {
+      const closeMatch = /^\/\s*([\w:-]+)/.exec(inner);
+      if (closeMatch) {
+        tokens.push({ type: 'closeTag', tagName: closeMatch[1].toLowerCase() });
+      }
+      continue;
+    }
+
+    const openMatch = /^([\w:-]+)/.exec(inner);
+    if (!openMatch) continue;
+
+    const tagName = openMatch[1].toLowerCase();
+    const remainder = inner.slice(openMatch[0].length);
+    const explicitSelfClosing = /\/\s*$/.test(remainder);
+    const attrString = explicitSelfClosing ? remainder.replace(/\/\s*$/, '') : remainder;
+    const isSelfClosing =
+      explicitSelfClosing || ['img', 'br', 'hr', 'input', 'meta', 'link'].includes(tagName);
+
+    tokens.push({
+      type: isSelfClosing ? 'selfClosingTag' : 'openTag',
+      tagName,
+      attributes: parseAttributes(attrString),
+      raw
+    });
   }
 
   return tokens;
+}
+
+const SAFE_LINK_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+const SAFE_IMAGE_SCHEMES = new Set(['http:', 'https:']);
+
+export function resolveSafeUrlReference(
+  value: string,
+  baseUrl?: string,
+  kind: 'link' | 'image' = 'link'
+): string {
+  const raw = value.trim();
+  if (!raw) return '';
+  if (kind === 'link' && raw.startsWith('#')) return raw;
+
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(raw);
+  const allowed = kind === 'image' ? SAFE_IMAGE_SCHEMES : SAFE_LINK_SCHEMES;
+  if (schemeMatch && !allowed.has(`${schemeMatch[1].toLowerCase()}:`)) {
+    return '';
+  }
+
+  if (!baseUrl || raw.startsWith('#')) return raw;
+
+  try {
+    const resolved = new URL(raw, baseUrl);
+    return allowed.has(resolved.protocol.toLowerCase()) ? resolved.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+function escapeMarkdownDestination(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
+    .replace(/[\r\n]/g, '');
+}
+
+function escapeMarkdownLabel(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]');
+}
+
+function escapeMarkdownTitle(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/[\r\n]+/g, ' ');
 }
 
 export class HtmlToAstParser {
@@ -74,14 +151,11 @@ export class HtmlToAstParser {
   }
 
   private resolveUrl(href: string): string {
-    if (!this.baseUrl || !href || href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('#')) {
-      return href;
-    }
-    try {
-      return new URL(href, this.baseUrl).toString();
-    } catch {
-      return href;
-    }
+    return resolveSafeUrlReference(href, this.baseUrl, 'link');
+  }
+
+  private resolveImageUrl(src: string): string {
+    return resolveSafeUrlReference(src, this.baseUrl, 'image');
   }
 
   public parse(html: string): AstNode {
@@ -174,7 +248,7 @@ export class HtmlToAstParser {
           node = { type: 'inlineCode', children: [] };
         } else if (tagName === 'a') {
           const href = this.resolveUrl(token.attributes?.['href'] || '');
-          if (!href.startsWith('javascript:')) {
+          if (href) {
             node = { type: 'link', href, title: token.attributes?.['title'], children: [] };
           }
         } else if (tagName === 'strong' || tagName === 'b') {
@@ -211,7 +285,7 @@ export class HtmlToAstParser {
           if (!currentParent.children) currentParent.children = [];
           currentParent.children.push({ type: 'hr' });
         } else if (tagName === 'img') {
-          const src = this.resolveUrl(token.attributes?.['src'] || '');
+          const src = this.resolveImageUrl(token.attributes?.['src'] || '');
           const alt = token.attributes?.['alt'] || '';
           const title = token.attributes?.['title'];
           if (src) {
@@ -332,10 +406,10 @@ function renderInlineText(children: AstNode[], isInsideTable: boolean): string {
         break;
       case 'link':
         const linkText = renderInlineText(child.children || [], isInsideTable).trim() || child.href || '';
-        result += `[${linkText}](${child.href || ''})`;
+        result += `[${linkText}](${escapeMarkdownDestination(child.href || '')})`;
         break;
       case 'image':
-        result += `![${child.alt || ''}](${child.src || ''}${child.title ? ` "${child.title}"` : ''})`;
+        result += `![${escapeMarkdownLabel(child.alt || '')}](${escapeMarkdownDestination(child.src || '')}${child.title ? ` "${escapeMarkdownTitle(child.title)}"` : ''})`;
         break;
       case 'br':
         result += isInsideTable ? ' ' : '\n';
