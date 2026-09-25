@@ -21,7 +21,7 @@ export * from './types.js';
 export * from './cache/index.js';
 export * from './cache/types.js';
 export * from './extractor/index.js';
-export * from './crawler/index.js';
+export * from './crawler/index.js';\nexport * from './firecrawl-compat.js';
 export * from './radar-heal/index.js';
 
 /**
