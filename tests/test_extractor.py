@@ -103,5 +103,49 @@ await mesh.crawl('https://nymrel.com');
         self.assertTrue(result.markdown.startswith("---"))
 
 
+    def test_blocks_active_content_schemes_and_escapes_destinations(self):
+        raw_html = """
+        <main>
+          <a href="javascript:alert(1)">javascript link</a>
+          <a href="data:text/html;base64,abc">data link</a>
+          <a href="vbscript:msgbox(1)">vbscript link</a>
+          <a href="/safe(path)">safe link</a>
+          <img src="data:image/png;base64,AAAA" alt="data image" />
+          <img src="vbscript:bad" alt="vb image" />
+          <img src="/image(path).png" alt="safe [image]" />
+        </main>
+        """
+        result = extract_markdown(raw_html, base_url="https://example.com/base/")
+        self.assertNotIn("javascript:", result.markdown)
+        self.assertNotIn("data:text/html", result.markdown)
+        self.assertNotIn("vbscript:", result.markdown)
+        self.assertIn("https://example.com/safe\\(path\\)", result.markdown)
+        self.assertIn("https://example.com/image\\(path\\).png", result.markdown)
+        self.assertEqual([link.href for link in result.links], ["https://example.com/safe(path)"])
+        self.assertEqual([image.src for image in result.images], ["https://example.com/image(path).png"])
+
+    def test_comment_scanner_and_frontmatter_escaping(self):
+        noisy = "<main><p>before</p>" + "<!--" * 5000 + "ignored--><p>after</p></main>"
+        result = extract_markdown(noisy, include_frontmatter=False)
+        self.assertIn("before", result.markdown)
+        self.assertIn("after", result.markdown)
+        self.assertNotIn("ignored", result.markdown)
+
+        metadata_html = """
+        <html>
+          <head>
+            <title>C:\\tools &quot;alpha&quot;</title>
+            <meta name="description" content="line1&#10;line2\\tail">
+            <link rel="canonical" href="https://example.com/a\\b">
+          </head>
+          <body><main><p>body</p></main></body>
+        </html>
+        """
+        escaped = extract_markdown(metadata_html)
+        self.assertIn('title: "C:\\\\tools \\"alpha\\""', escaped.markdown)
+        self.assertIn('description: "line1\\nline2\\\\tail"', escaped.markdown)
+        self.assertIn('canonical: "https://example.com/a\\\\b"', escaped.markdown)
+
+
 if __name__ == "__main__":
     unittest.main()
