@@ -23,6 +23,40 @@ Supported source runtimes:
 
 The two engines expose similar core behavior, but exact byte-for-byte feature parity is not promised. The tests define each runtime's supported contract.
 
+## Firecrawl v2 compatibility
+
+Crawler Mesh now includes a clean-room compatibility facade for the Firecrawl v2 shapes most useful to agent workflows:
+
+```typescript
+import { FirecrawlV2Compat } from '@nymrel/crawler-mesh';
+
+const firecrawl = new FirecrawlV2Compat({
+  maxPages: 50,
+  maxConcurrency: 5,
+  cache: false
+});
+
+const page = await firecrawl.scrape({
+  url: 'https://example.com',
+  formats: ['markdown', 'html', 'links']
+});
+
+const siteMap = await firecrawl.map({
+  url: 'https://example.com',
+  limit: 50
+});
+
+const crawl = await firecrawl.crawl({
+  url: 'https://example.com/docs',
+  limit: 50,
+  maxDiscoveryDepth: 3
+});
+```
+
+The facade uses only Crawler Mesh's local HTTP/extraction engine and reports `creditsUsed: 0`. It does not call Firecrawl Cloud, require a Firecrawl key, copy Firecrawl product code, or bypass Firecrawl billing.
+
+Supported compatibility formats are `markdown`, `html`, `rawHtml`, and `links`. Nested crawls keep Firecrawl-style child-path scope by default, with explicit whole-domain and subdomain expansion. Cloud-specific or not-yet-equivalent options such as `allowExternalLinks`, `sitemap: "only"`, structured LLM extraction, browser actions, and path-regex filters fail closed rather than silently changing semantics.
+
 ## Network safety defaults
 
 All crawler-controlled remote reads—including page, `robots.txt`, sitemap, CLI extraction, and redirects—share a fail-closed outbound policy:
