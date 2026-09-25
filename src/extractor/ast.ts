@@ -388,7 +388,10 @@ function renderInlineText(children: AstNode[], isInsideTable: boolean): string {
       case 'text':
         let val = child.value || '';
         if (isInsideTable) {
-          val = val.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+          val = val
+            .replace(/\\/g, '\\\\')
+            .replace(/\|/g, '\\|')
+            .replace(/\r?\n/g, ' ');
         }
         result += val;
         break;
