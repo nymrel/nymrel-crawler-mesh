@@ -460,10 +460,12 @@ export class CrawlerMesh extends EventEmitter {
           };
           this.emit('progress', progress);
 
-          // Enqueue discovered internal links if under maxDepth
+          // Enqueue discovered links and let CrawlQueue enforce the configured
+          // same-domain/subdomain/any policy. The default same-domain behavior
+          // stays unchanged, while broader modes now work as configured.
           if (item.depth < (effectiveConfig.maxDepth ?? 2)) {
             for (const link of result.links) {
-              if (link.isInternal && link.href) {
+              if (link.href) {
                 queue.enqueue({
                   url: link.href,
                   depth: item.depth + 1,
