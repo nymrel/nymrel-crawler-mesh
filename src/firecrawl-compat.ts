@@ -85,7 +85,7 @@ export interface FirecrawlCompatCrawlResponse {
 const SUPPORTED_FORMATS = new Set<FirecrawlCompatFormat>(['markdown', 'html', 'rawHtml', 'links']);
 
 function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&');
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function normalizeFormats(formats: FirecrawlCompatScrapeRequest['formats']): FirecrawlCompatFormat[] {
@@ -94,7 +94,7 @@ function normalizeFormats(formats: FirecrawlCompatScrapeRequest['formats']): Fir
   for (const value of formats) {
     const type = typeof value === 'string' ? value : value?.type;
     if (!SUPPORTED_FORMATS.has(type as FirecrawlCompatFormat)) {
-      throw new Error(\`Unsupported Firecrawl v2 format: \${String(type)}\`);
+      throw new Error(`Unsupported Firecrawl v2 format: ${String(type)}`);
     }
     normalized.push(type as FirecrawlCompatFormat);
   }
@@ -107,8 +107,8 @@ function childScopeDenyPattern(rawUrl: string): RegExp | null {
   if (path === '/') return null;
   const origin = escapeRegex(parsed.origin);
   const exact = escapeRegex(path);
-  const descendant = escapeRegex(\`\${path}/\`);
-  return new RegExp(\`^\${origin}(?!(?:\${exact}(?:[?#]|$)|\${descendant}))\`);
+  const descendant = escapeRegex(`${path}/`);
+  return new RegExp(`^${origin}(?!(?:${exact}(?:[?#]|$)|${descendant}))`);
 }
 
 function canonicalKey(rawUrl: string): string {
@@ -120,7 +120,7 @@ function canonicalKey(rawUrl: string): string {
 function inMapScope(root: URL, candidate: URL, includeSubdomains: boolean): boolean {
   const rootHost = root.hostname.toLowerCase().replace(/^www\./, '');
   const host = candidate.hostname.toLowerCase().replace(/^www\./, '');
-  return host === rootHost || (includeSubdomains && host.endsWith(\`.\${rootHost}\`));
+  return host === rootHost || (includeSubdomains && host.endsWith(`.${rootHost}`));
 }
 
 function toDocument(result: CrawlResult, formats: FirecrawlCompatFormat[]): FirecrawlCompatDocument {
@@ -196,7 +196,7 @@ export class FirecrawlV2Compat {
       if (!inMapScope(root, parsed, includeSubdomains)) return;
       parsed.hash = '';
       const key = canonicalKey(parsed.toString());
-      const haystack = \`\${key} \${title} \${description}\`.toLowerCase();
+      const haystack = `${key} ${title} ${description}`.toLowerCase();
       if (search && !haystack.includes(search)) return;
       if (!found.has(key)) found.set(key, { url: key, title, description });
     };
