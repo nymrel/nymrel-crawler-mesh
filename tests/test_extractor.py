@@ -147,5 +147,20 @@ await mesh.crawl('https://nymrel.com');
         self.assertIn('canonical: "https://example.com/a\\\\b"', escaped.markdown)
 
 
+    def test_tracking_image_scanner_handles_repeated_display_none(self):
+        repeated = "display:none;" * 5000
+        raw_html = (
+            '<main>'
+            f'<img src="/tracking.gif" style="{repeated}" alt="tracking" />'
+            '<img src="/visible.png" width="640" height="480" alt="visible" />'
+            '<p>body</p>'
+            '</main>'
+        )
+        result = extract_markdown(raw_html, include_frontmatter=False, target_main_content=False)
+        self.assertNotIn("/tracking.gif", result.markdown)
+        self.assertIn("/visible.png", result.markdown)
+        self.assertIn("body", result.markdown)
+
+
 if __name__ == "__main__":
     unittest.main()

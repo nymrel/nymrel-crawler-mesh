@@ -233,4 +233,19 @@ def crawl(url):
     assert.ok(result.markdown.includes('C:\\\\temp\\\\file\\|name'));
   });
 
+  it('removes tracking images with adversarial repeated display:none style content', () => {
+    const repeated = 'display:none;'.repeat(5000);
+    const html = `
+      <main>
+        <img src="/tracking.gif" style="${repeated}" alt="tracking" />
+        <img src="/visible.png" width="640" height="480" alt="visible" />
+        <p>body</p>
+      </main>
+    `;
+    const cleaned = cleanHtml(html, { targetMainContent: false });
+    assert.ok(!cleaned.includes('/tracking.gif'));
+    assert.ok(cleaned.includes('/visible.png'));
+    assert.ok(cleaned.includes('body'));
+  });
+
 });
