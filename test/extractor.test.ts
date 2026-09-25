@@ -220,4 +220,17 @@ def crawl(url):
     assert.ok(result.markdown.includes('canonical: "https://example.com/a\\\\b"'));
   });
 
+  it('escapes table backslashes before Markdown pipe escapes', () => {
+    const html = `
+      <main>
+        <table>
+          <tr><th>Path</th><th>Value</th></tr>
+          <tr><td>C:\\temp\\file|name</td><td>ok</td></tr>
+        </table>
+      </main>
+    `;
+    const result = extractMarkdown(html, { includeFrontmatter: false });
+    assert.ok(result.markdown.includes('C:\\\\temp\\\\file\\|name'));
+  });
+
 });
