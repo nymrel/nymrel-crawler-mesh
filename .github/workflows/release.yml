@@ -5,7 +5,10 @@ name: Build and publish packages
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
+    paths:
+      - '.release/publish-v1.0.0.json'
   workflow_dispatch:
 
 concurrency:
@@ -20,6 +23,8 @@ jobs:
     name: Verify release candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      publish_marker: ${{ steps.release_identity.outputs.publish_marker }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -47,17 +52,39 @@ jobs:
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Verify package versions and tag identity
+      - name: Verify package versions and release identity
+        id: release_identity
         env:
+          RELEASE_REF: ${{ github.ref }}
           RELEASE_REF_NAME: ${{ github.ref_name }}
           RELEASE_REF_TYPE: ${{ github.ref_type }}
         run: |
+          set -euo pipefail
+          echo "publish_marker=false" >> "$GITHUB_OUTPUT"
           node_version="$(node -p "require('./package.json').version")"
           python_version="$(python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")"
           test "$node_version" = "$python_version"
+
           if [ "$RELEASE_REF_TYPE" = "tag" ]; then
             test "v$node_version" = "$RELEASE_REF_NAME"
             git merge-base --is-ancestor HEAD refs/remotes/origin/main
+            exit 0
+          fi
+
+          if [ "$RELEASE_REF" = "refs/heads/main" ]; then
+            marker=".release/publish-v1.0.0.json"
+            if [ ! -f "$marker" ]; then
+              exit 0
+            fi
+            marker_version="$(node -p "require('./$marker').version")"
+            expected_source_sha="$(node -p "require('./$marker').expectedSourceSha")"
+            test "$marker_version" = "$node_version"
+            test "$expected_source_sha" = "360b6152267ebb6ca7bb9452e6240d2f4982f562"
+            git cat-file -e "$expected_source_sha^{commit}"
+            git diff --quiet "$expected_source_sha"..HEAD -- \
+              package.json package-lock.json pyproject.toml \
+              src python test tests bin README.md LICENSE SECURITY.md
+            echo "publish_marker=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run the Node.js gate
@@ -121,8 +148,8 @@ jobs:
 
   attest:
     name: Attest built distributions
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || needs.verify.outputs.publish_marker == 'true'
+    needs: [verify, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -143,8 +170,8 @@ jobs:
 
   publish-npm:
     name: Publish npm through trusted publishing
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, attest]
+    if: startsWith(github.ref, 'refs/tags/v') || needs.verify.outputs.publish_marker == 'true'
+    needs: [verify, build, attest]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment:
@@ -186,8 +213,8 @@ jobs:
 
   publish-pypi:
     name: Publish PyPI through trusted publishing
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, attest]
+    if: startsWith(github.ref, 'refs/tags/v') || needs.verify.outputs.publish_marker == 'true'
+    needs: [verify, build, attest]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment:
