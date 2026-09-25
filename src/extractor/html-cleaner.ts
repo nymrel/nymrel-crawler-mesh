@@ -4,23 +4,60 @@
  * Copyright (c) 2026 Nymrel / JalenBuilds LLC
  */
 
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  '#39': "'",
+  apos: "'",
+  nbsp: ' ',
+  mdash: '—',
+  ndash: '–',
+  hellip: '…',
+  laquo: '«',
+  raquo: '»'
+};
+
 export function decodeHtmlEntities(text: string): string {
   if (!text) return '';
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&mdash;/g, '—')
-    .replace(/&ndash;/g, '–')
-    .replace(/&hellip;/g, '…')
-    .replace(/&laquo;/g, '«')
-    .replace(/&raquo;/g, '»')
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, code) => String.fromCharCode(parseInt(code, 16)));
+  return text.replace(
+    /&(?:amp|lt|gt|quot|#39|apos|nbsp|mdash|ndash|hellip|laquo|raquo|#\d+|#x[0-9a-fA-F]+);/g,
+    (entity) => {
+      const token = entity.slice(1, -1);
+      if (token.startsWith('#x')) {
+        const codePoint = Number.parseInt(token.slice(2), 16);
+        return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+      }
+      if (token.startsWith('#')) {
+        const codePoint = Number.parseInt(token.slice(1), 10);
+        return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+      }
+      return NAMED_HTML_ENTITIES[token] ?? entity;
+    }
+  );
+}
+
+function stripHtmlComments(input: string): string {
+  let output = '';
+  let cursor = 0;
+
+  while (cursor < input.length) {
+    const start = input.indexOf('<!--', cursor);
+    if (start === -1) {
+      output += input.slice(cursor);
+      break;
+    }
+
+    output += input.slice(cursor, start);
+    const end = input.indexOf('-->', start + 4);
+    if (end === -1) {
+      break;
+    }
+    cursor = end + 3;
+  }
+
+  return output;
 }
 
 export interface CleanHtmlOptions {
@@ -33,7 +70,7 @@ export function cleanHtml(html: string, options: CleanHtmlOptions = {}): string 
   let cleaned = html;
 
   // 1. Remove HTML comments
-  cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+  cleaned = stripHtmlComments(cleaned);
 
   // 2. Remove script, style, noscript, svg, iframe, canvas, audio, video, template, object, embed
   const tagsToRemove = [
