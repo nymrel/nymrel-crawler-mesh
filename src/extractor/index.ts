@@ -10,6 +10,7 @@ import {
   extractCodeBlocksFromAst,
   extractTablesFromAst,
   HtmlToAstParser,
+  resolveSafeUrlReference,
   tokenizeHtml
 } from './ast.js';
 import type {
@@ -142,15 +143,11 @@ export function extractLinksAndImages(
       let href = token.attributes?.['href'] || '';
       const rel = token.attributes?.['rel'];
 
-      if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
-        if (baseUrl) {
-          try {
-            href = new URL(href, baseUrl).toString();
-          } catch {
-            // ignore
-          }
+      if (href && !href.startsWith('#')) {
+        href = resolveSafeUrlReference(href, baseUrl, 'link');
+        if (href) {
+          currentLink = { href, text: '', rel };
         }
-        currentLink = { href, text: '', rel };
       }
     } else if (token.type === 'closeTag' && token.tagName === 'a') {
       if (currentLink) {
@@ -177,20 +174,24 @@ export function extractLinksAndImages(
       const alt = token.attributes?.['alt'] || '';
       const title = token.attributes?.['title'];
 
-      if (src && !src.startsWith('data:')) {
-        if (baseUrl) {
-          try {
-            src = new URL(src, baseUrl).toString();
-          } catch {
-            // ignore
-          }
+      if (src) {
+        src = resolveSafeUrlReference(src, baseUrl, 'image');
+        if (src) {
+          images.push({ src, alt, title });
         }
-        images.push({ src, alt, title });
       }
     }
   }
 
   return { links, images };
+}
+
+function escapeYamlDoubleQuoted(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
 }
 
 export function extractMarkdown(
@@ -258,12 +259,12 @@ export function extractMarkdown(
   // Add YAML Frontmatter if requested (default: true)
   if (options.includeFrontmatter !== false) {
     const frontmatterLines: string[] = ['---'];
-    if (metadata.title) frontmatterLines.push(`title: "${metadata.title.replace(/"/g, '\\"')}"`);
-    if (metadata.description) frontmatterLines.push(`description: "${metadata.description.replace(/"/g, '\\"')}"`);
-    if (metadata.canonical) frontmatterLines.push(`canonical: "${metadata.canonical}"`);
-    if (metadata.author) frontmatterLines.push(`author: "${metadata.author.replace(/"/g, '\\"')}"`);
-    if (metadata.publishedTime) frontmatterLines.push(`published: "${metadata.publishedTime}"`);
-    if (metadata.language) frontmatterLines.push(`language: "${metadata.language}"`);
+    if (metadata.title) frontmatterLines.push(`title: "${escapeYamlDoubleQuoted(metadata.title)}"`);
+    if (metadata.description) frontmatterLines.push(`description: "${escapeYamlDoubleQuoted(metadata.description)}"`);
+    if (metadata.canonical) frontmatterLines.push(`canonical: "${escapeYamlDoubleQuoted(metadata.canonical)}"`);
+    if (metadata.author) frontmatterLines.push(`author: "${escapeYamlDoubleQuoted(metadata.author)}"`);
+    if (metadata.publishedTime) frontmatterLines.push(`published: "${escapeYamlDoubleQuoted(metadata.publishedTime)}"`);
+    if (metadata.language) frontmatterLines.push(`language: "${escapeYamlDoubleQuoted(metadata.language)}"`);
     frontmatterLines.push(`words: ${wordCount}`);
     frontmatterLines.push(`tokens: ${estimatedTokens}`);
     frontmatterLines.push(`extractedAt: "${new Date().toISOString()}"`);

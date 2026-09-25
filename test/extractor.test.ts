@@ -166,4 +166,58 @@ def crawl(url):
     assert.equal(result.links.length, 1);
     assert.equal(result.links[0].href, 'https://github.com/nymrel/nymrel-crawler-mesh');
   });
+  it('blocks active-content URL schemes and escapes rendered destinations', () => {
+    const html = `
+      <main>
+        <p><a href="javascript:alert(1)">javascript link</a></p>
+        <p><a href="data:text/html;base64,PHNjcmlwdD4=">data link</a></p>
+        <p><a href="vbscript:msgbox(1)">vbscript link</a></p>
+        <p><a href="/safe(path)">safe link</a></p>
+        <img src="data:image/png;base64,AAAA" alt="data image" />
+        <img src="vbscript:bad" alt="vb image" />
+        <img src="/image(path).png" alt="safe [image]" />
+      </main>
+    `;
+
+    const result = extractMarkdown(html, { baseUrl: 'https://example.com/base/' });
+
+    assert.ok(!result.markdown.includes('javascript:'), 'javascript URLs must not reach Markdown');
+    assert.ok(!result.markdown.includes('data:text/html'), 'data URLs must not reach Markdown');
+    assert.ok(!result.markdown.includes('vbscript:'), 'vbscript URLs must not reach Markdown');
+    assert.ok(result.markdown.includes('https://example.com/safe\\(path\\)'), 'safe link destination should be escaped');
+    assert.ok(result.markdown.includes('https://example.com/image\\(path\\).png'), 'safe image destination should be escaped');
+    assert.equal(result.links.length, 1);
+    assert.equal(result.links[0].href, 'https://example.com/safe(path)');
+    assert.equal(result.images.length, 1);
+    assert.equal(result.images[0].src, 'https://example.com/image(path).png');
+  });
+
+  it('decodes entities once and strips adversarial comments without backtracking', () => {
+    const nestedEntity = extractMarkdown('<main><p>&amp;lt;tag&amp;gt;</p></main>', { includeFrontmatter: false });
+    assert.ok(nestedEntity.markdown.includes('&lt;tag&gt;'), 'entity decoding should be single-pass');
+
+    const noisy = '<main><p>before</p>' + '<!--'.repeat(5000) + 'ignored--><p>after</p></main>';
+    const cleaned = cleanHtml(noisy);
+    assert.ok(cleaned.includes('before'));
+    assert.ok(cleaned.includes('after'));
+    assert.ok(!cleaned.includes('ignored'));
+  });
+
+  it('escapes backslashes, quotes, and newlines in YAML frontmatter', () => {
+    const html = `
+      <html>
+        <head>
+          <title>C:\\tools &quot;alpha&quot;</title>
+          <meta name="description" content="line1&#10;line2\\tail">
+          <link rel="canonical" href="https://example.com/a\\b">
+        </head>
+        <body><main><p>body</p></main></body>
+      </html>
+    `;
+    const result = extractMarkdown(html);
+    assert.ok(result.markdown.includes('title: "C:\\\\tools \\"alpha\\""'));
+    assert.ok(result.markdown.includes('description: "line1\\nline2\\\\tail"'));
+    assert.ok(result.markdown.includes('canonical: "https://example.com/a\\\\b"'));
+  });
+
 });
