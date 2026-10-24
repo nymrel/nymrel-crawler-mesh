@@ -3,29 +3,128 @@
  * HTML Sanitizer & Noise Stripper
  * Copyright (c) 2026 Nymrel / JalenBuilds LLC
  */
+const NAMED_HTML_ENTITIES = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    '#39': "'",
+    apos: "'",
+    nbsp: ' ',
+    mdash: '—',
+    ndash: '–',
+    hellip: '…',
+    laquo: '«',
+    raquo: '»'
+};
 export function decodeHtmlEntities(text) {
     if (!text)
         return '';
-    return text
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&apos;/g, "'")
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&mdash;/g, '—')
-        .replace(/&ndash;/g, '–')
-        .replace(/&hellip;/g, '…')
-        .replace(/&laquo;/g, '«')
-        .replace(/&raquo;/g, '»')
-        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
-        .replace(/&#x([0-9a-fA-F]+);/g, (_, code) => String.fromCharCode(parseInt(code, 16)));
+    return text.replace(/&(?:amp|lt|gt|quot|#39|apos|nbsp|mdash|ndash|hellip|laquo|raquo|#\d+|#x[0-9a-fA-F]+);/g, (entity) => {
+        const token = entity.slice(1, -1);
+        if (token.startsWith('#x')) {
+            const codePoint = Number.parseInt(token.slice(2), 16);
+            return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+        }
+        if (token.startsWith('#')) {
+            const codePoint = Number.parseInt(token.slice(1), 10);
+            return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+        }
+        return NAMED_HTML_ENTITIES[token] ?? entity;
+    });
+}
+function stripHtmlComments(input) {
+    let output = '';
+    let cursor = 0;
+    while (cursor < input.length) {
+        const start = input.indexOf('<!--', cursor);
+        if (start === -1) {
+            output += input.slice(cursor);
+            break;
+        }
+        output += input.slice(cursor, start);
+        const end = input.indexOf('-->', start + 4);
+        if (end === -1) {
+            break;
+        }
+        cursor = end + 3;
+    }
+    return output;
+}
+function readTagAttribute(tag, attributeName) {
+    const lower = tag.toLowerCase();
+    const needle = attributeName.toLowerCase();
+    let cursor = 0;
+    while (cursor < lower.length) {
+        const index = lower.indexOf(needle, cursor);
+        if (index === -1)
+            return undefined;
+        const before = index === 0 ? '' : lower[index - 1];
+        const after = lower[index + needle.length] ?? '';
+        const isNameChar = (char) => /[a-z0-9_:-]/i.test(char);
+        if ((before && isNameChar(before)) || (after && isNameChar(after))) {
+            cursor = index + needle.length;
+            continue;
+        }
+        let position = index + needle.length;
+        while (position < tag.length && /\s/.test(tag[position]))
+            position++;
+        if (tag[position] !== '=') {
+            cursor = index + needle.length;
+            continue;
+        }
+        position++;
+        while (position < tag.length && /\s/.test(tag[position]))
+            position++;
+        const quote = tag[position];
+        if (quote === '"' || quote === "'") {
+            const end = tag.indexOf(quote, position + 1);
+            return end === -1 ? tag.slice(position + 1) : tag.slice(position + 1, end);
+        }
+        let end = position;
+        while (end < tag.length && !/[\s>]/.test(tag[end]))
+            end++;
+        return tag.slice(position, end);
+    }
+    return undefined;
+}
+function stripTrackingImages(input) {
+    const lower = input.toLowerCase();
+    let output = '';
+    let cursor = 0;
+    while (cursor < input.length) {
+        let start = lower.indexOf('<img', cursor);
+        while (start !== -1) {
+            const boundary = lower[start + 4] ?? '';
+            if (!boundary || /[\s/>]/.test(boundary))
+                break;
+            start = lower.indexOf('<img', start + 4);
+        }
+        if (start === -1) {
+            output += input.slice(cursor);
+            break;
+        }
+        const end = input.indexOf('>', start + 4);
+        if (end === -1) {
+            output += input.slice(cursor);
+            break;
+        }
+        output += input.slice(cursor, start);
+        const tag = input.slice(start, end + 1);
+        const width = readTagAttribute(tag, 'width')?.trim();
+        const height = readTagAttribute(tag, 'height')?.trim();
+        const style = readTagAttribute(tag, 'style')?.toLowerCase().replace(/\s+/g, '') ?? '';
+        const tracking = width === '1' || height === '1' || style.includes('display:none');
+        if (!tracking)
+            output += tag;
+        cursor = end + 1;
+    }
+    return output;
 }
 export function cleanHtml(html, options = {}) {
     let cleaned = html;
     // 1. Remove HTML comments
-    cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+    cleaned = stripHtmlComments(cleaned);
     // 2. Remove script, style, noscript, svg, iframe, canvas, audio, video, template, object, embed
     const tagsToRemove = [
         'script', 'style', 'noscript', 'svg', 'iframe', 'canvas', 'audio',
@@ -43,8 +142,8 @@ export function cleanHtml(html, options = {}) {
         const regex = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi');
         cleaned = cleaned.replace(regex, '');
     }
-    // 4. Remove tracking pixels (1x1 images, display:none images)
-    cleaned = cleaned.replace(/<img\b[^>]*\b(width=["']1["']|height=["']1["']|style=["'][^"']*display:\s*none[^"']*["'])[^>]*\/?>/gi, '');
+    // 4. Remove tracking pixels (1x1 images, display:none images) with a bounded scanner.
+    cleaned = stripTrackingImages(cleaned);
     // 5. Remove ad / cookie / popup / modal / newsletter / social banner elements by class/id/role heuristics
     const noisePatterns = [
         /(?:class|id)=["'][^"']*\b(ad-container|ad-wrapper|ad-banner|adsbygoogle|banner-ad|cookie-banner|cookie-consent|cookie-notice|popup-overlay|modal-overlay|newsletter-signup|social-share|share-buttons|site-footer|disclaimer-banner)\b[^"']*["']/gi,

@@ -13,10 +13,12 @@ interface HtmlToken {
 }
 export declare function parseAttributes(attrString: string): Record<string, string>;
 export declare function tokenizeHtml(html: string): HtmlToken[];
+export declare function resolveSafeUrlReference(value: string, baseUrl?: string, kind?: 'link' | 'image'): string;
 export declare class HtmlToAstParser {
     private baseUrl?;
     constructor(baseUrl?: string);
     private resolveUrl;
+    private resolveImageUrl;
     parse(html: string): AstNode;
 }
 export declare function astToMarkdown(node: AstNode, listDepth?: number, isInsideTable?: boolean): string;

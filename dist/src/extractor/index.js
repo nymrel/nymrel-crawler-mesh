@@ -4,7 +4,7 @@
  * Copyright (c) 2026 Nymrel / JalenBuilds LLC
  */
 import { cleanHtml, decodeHtmlEntities } from './html-cleaner.js';
-import { astToMarkdown, extractCodeBlocksFromAst, extractTablesFromAst, HtmlToAstParser, tokenizeHtml } from './ast.js';
+import { astToMarkdown, extractCodeBlocksFromAst, extractTablesFromAst, HtmlToAstParser, resolveSafeUrlReference, tokenizeHtml } from './ast.js';
 export * from './types.js';
 export * from './html-cleaner.js';
 export * from './ast.js';
@@ -16,8 +16,8 @@ export function extractMetadata(html, baseUrl) {
     let publishedTime = '';
     let modifiedTime = '';
     let language = '';
-    const openGraph = {};
-    const twitterCard = {};
+    const openGraph = Object.create(null);
+    const twitterCard = Object.create(null);
     const keywords = [];
     // Extract <title>
     const titleMatch = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
@@ -121,16 +121,11 @@ export function extractLinksAndImages(html, baseUrl) {
         if (token.type === 'openTag' && token.tagName === 'a') {
             let href = token.attributes?.['href'] || '';
             const rel = token.attributes?.['rel'];
-            if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
-                if (baseUrl) {
-                    try {
-                        href = new URL(href, baseUrl).toString();
-                    }
-                    catch {
-                        // ignore
-                    }
+            if (href && !href.startsWith('#')) {
+                href = resolveSafeUrlReference(href, baseUrl, 'link');
+                if (href) {
+                    currentLink = { href, text: '', rel };
                 }
-                currentLink = { href, text: '', rel };
             }
         }
         else if (token.type === 'closeTag' && token.tagName === 'a') {
@@ -160,20 +155,22 @@ export function extractLinksAndImages(html, baseUrl) {
             let src = token.attributes?.['src'] || '';
             const alt = token.attributes?.['alt'] || '';
             const title = token.attributes?.['title'];
-            if (src && !src.startsWith('data:')) {
-                if (baseUrl) {
-                    try {
-                        src = new URL(src, baseUrl).toString();
-                    }
-                    catch {
-                        // ignore
-                    }
+            if (src) {
+                src = resolveSafeUrlReference(src, baseUrl, 'image');
+                if (src) {
+                    images.push({ src, alt, title });
                 }
-                images.push({ src, alt, title });
             }
         }
     }
     return { links, images };
+}
+function escapeYamlDoubleQuoted(value) {
+    return value
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n');
 }
 export function extractMarkdown(rawHtml, options = {}) {
     const metadata = extractMetadata(rawHtml, options.baseUrl);
@@ -228,17 +225,17 @@ export function extractMarkdown(rawHtml, options = {}) {
     if (options.includeFrontmatter !== false) {
         const frontmatterLines = ['---'];
         if (metadata.title)
-            frontmatterLines.push(`title: "${metadata.title.replace(/"/g, '\\"')}"`);
+            frontmatterLines.push(`title: "${escapeYamlDoubleQuoted(metadata.title)}"`);
         if (metadata.description)
-            frontmatterLines.push(`description: "${metadata.description.replace(/"/g, '\\"')}"`);
+            frontmatterLines.push(`description: "${escapeYamlDoubleQuoted(metadata.description)}"`);
         if (metadata.canonical)
-            frontmatterLines.push(`canonical: "${metadata.canonical}"`);
+            frontmatterLines.push(`canonical: "${escapeYamlDoubleQuoted(metadata.canonical)}"`);
         if (metadata.author)
-            frontmatterLines.push(`author: "${metadata.author.replace(/"/g, '\\"')}"`);
+            frontmatterLines.push(`author: "${escapeYamlDoubleQuoted(metadata.author)}"`);
         if (metadata.publishedTime)
-            frontmatterLines.push(`published: "${metadata.publishedTime}"`);
+            frontmatterLines.push(`published: "${escapeYamlDoubleQuoted(metadata.publishedTime)}"`);
         if (metadata.language)
-            frontmatterLines.push(`language: "${metadata.language}"`);
+            frontmatterLines.push(`language: "${escapeYamlDoubleQuoted(metadata.language)}"`);
         frontmatterLines.push(`words: ${wordCount}`);
         frontmatterLines.push(`tokens: ${estimatedTokens}`);
         frontmatterLines.push(`extractedAt: "${new Date().toISOString()}"`);
