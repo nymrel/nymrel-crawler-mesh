@@ -5,15 +5,15 @@
  */
 import { decodeHtmlEntities } from './html-cleaner.js';
 export function parseAttributes(attrString) {
-    const attrs = Object.create(null);
+    const attrs = new Map();
     const attrRegex = /([a-zA-Z0-9_:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
     let match;
     while ((match = attrRegex.exec(attrString)) !== null) {
         const name = match[1].toLowerCase();
         const value = match[2] ?? match[3] ?? match[4] ?? '';
-        attrs[name] = decodeHtmlEntities(value);
+        attrs.set(name, decodeHtmlEntities(value));
     }
-    return attrs;
+    return Object.setPrototypeOf(Object.fromEntries(attrs), null);
 }
 export function tokenizeHtml(html) {
     const tokens = [];
