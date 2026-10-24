@@ -6,9 +6,27 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractMarkdown, extractMetadata, cleanHtml } from '../src/extractor/index.js';
+import { extractMarkdown, extractMetadata, cleanHtml, parseAttributes } from '../src/extractor/index.js';
 
 describe('Semantic HTML Extractor', () => {
+  it('stores adversarial HTML keys as own strings without changing prototypes', () => {
+    const attrs = parseAttributes('__proto__="attribute" constructor="ctor"');
+    assert.equal(Object.getPrototypeOf(attrs), null);
+    assert.equal(Object.hasOwn(attrs, '__proto__'), true);
+    assert.equal(attrs['__proto__'], 'attribute');
+    assert.equal(attrs['constructor'], 'ctor');
+
+    const metadata = extractMetadata('<meta property="og:__proto__" content="graph"><meta property="og:constructor" content="graph-ctor"><meta name="twitter:__proto__" content="card"><meta name="twitter:constructor" content="card-ctor">');
+    assert.equal(Object.getPrototypeOf(metadata.openGraph), null);
+    assert.equal(Object.getPrototypeOf(metadata.twitterCard), null);
+    assert.equal(Object.hasOwn(metadata.openGraph, '__proto__'), true);
+    assert.equal(Object.hasOwn(metadata.twitterCard, '__proto__'), true);
+    assert.equal(metadata.openGraph['__proto__'], 'graph');
+    assert.equal(metadata.openGraph['constructor'], 'graph-ctor');
+    assert.equal(metadata.twitterCard['__proto__'], 'card');
+    assert.equal(metadata.twitterCard['constructor'], 'card-ctor');
+    assert.equal(Object.prototype.hasOwnProperty.call(Object.prototype, 'graph'), false);
+  });
   it('strips navbars, footers, scripts, tracking pixels, and ads', () => {
     const rawHtml = `
       <!DOCTYPE html>
