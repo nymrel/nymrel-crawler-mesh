@@ -16,8 +16,8 @@ export function extractMetadata(html, baseUrl) {
     let publishedTime = '';
     let modifiedTime = '';
     let language = '';
-    const openGraph = Object.create(null);
-    const twitterCard = Object.create(null);
+    const openGraph = new Map();
+    const twitterCard = new Map();
     const keywords = [];
     // Extract <title>
     const titleMatch = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
@@ -47,7 +47,7 @@ export function extractMetadata(html, baseUrl) {
                 keywords.push(...val.split(',').map(k => k.trim()).filter(Boolean));
             }
             else if (key.startsWith('og:')) {
-                openGraph[key.substring(3)] = val;
+                openGraph.set(key.substring(3), val);
                 if (key === 'og:title' && !title)
                     title = val;
                 if (key === 'og:description' && !description)
@@ -56,7 +56,7 @@ export function extractMetadata(html, baseUrl) {
                     canonical = val;
             }
             else if (key.startsWith('twitter:')) {
-                twitterCard[key.substring(8)] = val;
+                twitterCard.set(key.substring(8), val);
             }
             else if (key === 'article:published_time' || key === 'published_time') {
                 publishedTime = val;
@@ -94,8 +94,8 @@ export function extractMetadata(html, baseUrl) {
         publishedTime: publishedTime || undefined,
         modifiedTime: modifiedTime || undefined,
         language: language || undefined,
-        openGraph,
-        twitterCard,
+        openGraph: Object.setPrototypeOf(Object.fromEntries(openGraph), null),
+        twitterCard: Object.setPrototypeOf(Object.fromEntries(twitterCard), null),
         keywords,
         wordCount: 0,
         characterCount: 0,
