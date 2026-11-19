@@ -165,7 +165,7 @@ async function handleCrawl(args) {
     return summary.totalErrors > 0 && summary.totalCrawled === 0 ? 1 : 0;
 }
 async function handleExtract(args) {
-    const target = args.find(a => !a.startsWith('-'));
+    const target = args.find(a => a === '-' || !a.startsWith('-'));
     if (!target) {
         console.error('Error: Missing required URL, file path, or "-" for stdin');
         return 1;

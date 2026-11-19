@@ -9,9 +9,21 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { runCli } from '../src/cli.js';
 
 describe('CLI Driver Interface', () => {
+  it('extracts structured JSON from piped HTML using the documented stdin target', () => {
+    const cli = new URL('../../bin/crawler-mesh.js', import.meta.url);
+    const result = spawnSync(process.execPath, [cli.pathname, 'extract', '-', '--format', 'json'], {
+      input: '<html><head><title>Piped example</title></head><body><h1>Saved page</h1><p>Offline content</p></body></html>',
+      encoding: 'utf8'
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const extracted = JSON.parse(result.stdout);
+    assert.ok(extracted.markdown.includes('Saved page'));
+    assert.ok(extracted.markdown.includes('Offline content'));
+  });
   it('executes help and version commands successfully', async () => {
     const helpCode = await runCli(['--help']);
     assert.equal(helpCode, 0);

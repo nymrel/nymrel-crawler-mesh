@@ -183,7 +183,7 @@ async function handleCrawl(args: string[]): Promise<number> {
 }
 
 async function handleExtract(args: string[]): Promise<number> {
-  const target = args.find(a => !a.startsWith('-'));
+  const target = args.find(a => a === '-' || !a.startsWith('-'));
   if (!target) {
     console.error('Error: Missing required URL, file path, or "-" for stdin');
     return 1;
